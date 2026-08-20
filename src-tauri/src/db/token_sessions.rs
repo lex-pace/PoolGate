@@ -801,7 +801,7 @@ mod tests {
                     ('claude_code:sess-a', 'claude_code', 'sess-a', '[]', datetime('now','-2 days'), datetime('now'), 100, 2),
                     ('claude_code:sess-b', 'claude_code', 'sess-b', '[]', datetime('now','-12 days'), datetime('now','-10 days'), 200, 3),
                     ('workbuddy:sess-c', 'workbuddy', 'sess-c', '[]', datetime('now','-2 days'), datetime('now','+1 hour'), 300, 4),
-                    ('freebuff:sess-d', 'freebuff', 'sess-d', '[]', datetime('now','-2 days'), datetime('now','-1 hour'), 400, 5);",
+                    ('freebuff:sess-d', 'freebuff', 'sess-d', '[]', datetime('now','-2 days'), datetime('now'), 400, 5);",
             )
             .expect("seed");
         }
