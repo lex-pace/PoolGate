@@ -147,9 +147,14 @@ fn first_token_number(value: &serde_json::Value, paths: &[&str]) -> Option<i64> 
 }
 
 fn usage_object(metrics: &serde_json::Value) -> Option<&serde_json::Value> {
-    ["/usage", "/providerData/usage", "/response/usage", "/data/usage"]
-        .iter()
-        .find_map(|path| metrics.pointer(path).filter(|value| value.is_object()))
+    [
+        "/usage",
+        "/providerData/usage",
+        "/response/usage",
+        "/data/usage",
+    ]
+    .iter()
+    .find_map(|path| metrics.pointer(path).filter(|value| value.is_object()))
 }
 
 /// 取模型名。新版 Freebuff 通常写在线程 `model`，旧版/部分 provider 则写在
@@ -456,7 +461,7 @@ fn thread_summary(
         .ok();
     let project_base = project_path
         .as_deref()
-        .map(|p| PathBuf::from(p))
+        .map(PathBuf::from)
         .and_then(|p| p.file_name().map(|n| n.to_os_string()))
         .and_then(|n| n.into_string().ok())
         .unwrap_or_else(|| "工作区".to_string());
@@ -688,11 +693,7 @@ impl ToolAdapter for FreebuffAdapter {
             });
             // 优先使用当前行之前最近的模型；线程模型只是没有任何逐消息模型时的
             // fallback，避免模型切换后把历史 token 全归到最新模型。
-            let resolved = inherited.or_else(|| {
-                thread_model
-                    .get(&thread_id)
-                    .map(String::as_str)
-            });
+            let resolved = inherited.or_else(|| thread_model.get(&thread_id).map(String::as_str));
             if let Some(mut event) = parse_metrics(&thread_id, ts, seq, &metrics_json, resolved) {
                 // 同一用户可能有多个 Freebuff workspace；thread UUID/seq 只在单库内唯一，
                 // 必须把 source_id 放入 locator，避免跨 workspace 被去重成一条。
@@ -753,15 +754,13 @@ fn thread_models(conn: &rusqlite::Connection, thread_ids: &[String]) -> HashMap<
         .map(|it| it.filter_map(|r| r.ok()).collect::<Vec<_>>());
     drop(stmt);
     for (id, model, snapshot) in rows.unwrap_or_default() {
-        let m = model
-            .filter(|m| !m.trim().is_empty())
-            .or_else(|| {
-                snapshot.as_deref().and_then(|s| {
-                    serde_json::from_str::<serde_json::Value>(s)
-                        .ok()
-                        .and_then(|value| model_from_value(&value))
-                })
-            });
+        let m = model.filter(|m| !m.trim().is_empty()).or_else(|| {
+            snapshot.as_deref().and_then(|s| {
+                serde_json::from_str::<serde_json::Value>(s)
+                    .ok()
+                    .and_then(|value| model_from_value(&value))
+            })
+        });
         if let Some(m) = m {
             out.insert(id, m);
         }
@@ -968,7 +967,10 @@ fn dedupe_legacy_sessions(conn: &Mutex<rusqlite::Connection>) -> Result<usize, S
         for (id, _) in &rows {
             if *id != keep_id {
                 removed += guard
-                    .execute("DELETE FROM tm_session WHERE session_id=?1", rusqlite::params![id])
+                    .execute(
+                        "DELETE FROM tm_session WHERE session_id=?1",
+                        rusqlite::params![id],
+                    )
                     .map_err(|e| e.to_string())?;
             }
         }
@@ -1058,7 +1060,7 @@ mod tests {
     use super::*;
 
     fn adapter() -> FreebuffAdapter {
-        FreebuffAdapter::default()
+        FreebuffAdapter
     }
 
     #[test]
@@ -1074,7 +1076,10 @@ mod tests {
         assert_eq!(event.reasoning_tokens, Some(60217));
         // total 用 Freebuff 报告值（含缓存，与 tokscale 口径一致）
         assert_eq!(event.total_tokens, Some(10589311));
-        assert_eq!(event.model_raw.as_deref(), Some("deepseek/deepseek-v4-flash"));
+        assert_eq!(
+            event.model_raw.as_deref(),
+            Some("deepseek/deepseek-v4-flash")
+        );
         assert_eq!(event.occurred_at, "2026-08-12T07:06:06Z");
     }
 
@@ -1120,21 +1125,24 @@ mod tests {
     fn parse_metrics_inherits_model_when_row_lacks_it() {
         // 行自身无 context.model → 用线程继承的最近已知模型
         let json = r#"{"context":{"usedTokens":100},"usage":{"inputTokens":50,"outputTokens":10,"totalTokens":60}}"#;
-        let event = parse_metrics("t", 0, 4, json, Some("deepseek/deepseek-v4-flash")).expect("event");
+        let event =
+            parse_metrics("t", 0, 4, json, Some("deepseek/deepseek-v4-flash")).expect("event");
         assert_eq!(
             event.model_raw.as_deref(),
             Some("deepseek/deepseek-v4-flash")
         );
         // 空串 model 同样视为缺失 → 继承生效（Freebuff 偶发 context.model=""）
         let json_empty = r#"{"context":{"model":""},"usage":{"inputTokens":50,"outputTokens":10,"totalTokens":60}}"#;
-        let event2 = parse_metrics("t", 0, 5, json_empty, Some("deepseek/deepseek-v4-flash")).expect("event");
+        let event2 = parse_metrics("t", 0, 5, json_empty, Some("deepseek/deepseek-v4-flash"))
+            .expect("event");
         assert_eq!(
             event2.model_raw.as_deref(),
             Some("deepseek/deepseek-v4-flash")
         );
         // 行自身带模型时优先（忽略继承）
         let own = r#"{"context":{"model":"gpt-5"},"usage":{"inputTokens":1,"outputTokens":1,"totalTokens":2}}"#;
-        let event = parse_metrics("t", 0, 5, own, Some("deepseek/deepseek-v4-flash")).expect("event");
+        let event =
+            parse_metrics("t", 0, 5, own, Some("deepseek/deepseek-v4-flash")).expect("event");
         assert_eq!(event.model_raw.as_deref(), Some("gpt-5"));
     }
 
@@ -1186,8 +1194,16 @@ mod tests {
         assert_eq!(session.message_count, 2);
         assert_eq!(session.external_session_id.as_deref(), Some("t1"));
         // 标题用项目 basename，不含 thread 标题（隐私）
-        assert!(session.title_redacted.as_deref().unwrap().contains("proj-a"));
-        assert!(!session.title_redacted.as_deref().unwrap().contains("secret"));
+        assert!(session
+            .title_redacted
+            .as_deref()
+            .unwrap()
+            .contains("proj-a"));
+        assert!(!session
+            .title_redacted
+            .as_deref()
+            .unwrap()
+            .contains("secret"));
         let cp = &r1.next_checkpoint;
         assert_eq!(cp.last_record_id.as_deref(), Some("3")); // 最大 seq
 
@@ -1367,9 +1383,23 @@ mod tests {
                ('t-empty', '', '{\"model\":\"\"}');",
         )
         .expect("schema");
-        let map = thread_models(&conn, &["t-direct".into(), "t-snap".into(), "t-none".into(), "t-empty".into()]);
-        assert_eq!(map.get("t-direct").map(String::as_str), Some("deepseek/deepseek-v4-flash"));
-        assert_eq!(map.get("t-snap").map(String::as_str), Some("deepseek/deepseek-v4-flash"));
+        let map = thread_models(
+            &conn,
+            &[
+                "t-direct".into(),
+                "t-snap".into(),
+                "t-none".into(),
+                "t-empty".into(),
+            ],
+        );
+        assert_eq!(
+            map.get("t-direct").map(String::as_str),
+            Some("deepseek/deepseek-v4-flash")
+        );
+        assert_eq!(
+            map.get("t-snap").map(String::as_str),
+            Some("deepseek/deepseek-v4-flash")
+        );
         // 无模型 / 空串模型 → 不产出条目
         assert!(!map.contains_key("t-none"));
         assert!(!map.contains_key("t-empty"));

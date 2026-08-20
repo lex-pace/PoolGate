@@ -119,7 +119,7 @@ impl ClientKeyRepo {
         let mut rows = stmt.query([]).map_err(|e| e.to_string())?;
         let mut out = Vec::new();
         while let Some(row) = rows.next().map_err(|e| e.to_string())? {
-            let key = Self::row_to_key(&row)?;
+            let key = Self::row_to_key(row)?;
             out.push(Self::to_view(&conn, &key)?);
         }
         Ok(out)
@@ -164,7 +164,7 @@ impl ClientKeyRepo {
             .map_err(|e| e.to_string())?;
         match rows.next().map_err(|e| e.to_string())? {
             Some(row) => {
-                let key = Self::row_to_key(&row)?;
+                let key = Self::row_to_key(row)?;
                 Ok(Some(Self::to_view(&conn, &key)?))
             }
             None => Ok(None),
@@ -187,7 +187,7 @@ impl ClientKeyRepo {
             .query(rusqlite::params![pool_id])
             .map_err(|e| e.to_string())?;
         match rows.next().map_err(|e| e.to_string())? {
-            Some(row) => Ok(Some(Self::row_to_key(&row)?)),
+            Some(row) => Ok(Some(Self::row_to_key(row)?)),
             None => Ok(None),
         }
     }
@@ -210,7 +210,7 @@ impl ClientKeyRepo {
             .query(rusqlite::params![id])
             .map_err(|e| e.to_string())?;
         match rows.next().map_err(|e| e.to_string())? {
-            Some(row) => Ok(Some(Self::row_to_key(&row)?)),
+            Some(row) => Ok(Some(Self::row_to_key(row)?)),
             None => Ok(None),
         }
     }
@@ -235,7 +235,7 @@ impl ClientKeyRepo {
             .map_err(|e| e.to_string())?;
         match rows.next().map_err(|e| e.to_string())? {
             Some(row) => {
-                let key = Self::row_to_key(&row)?;
+                let key = Self::row_to_key(row)?;
                 if !key.enabled.unwrap_or(true) {
                     return Ok(None);
                 }

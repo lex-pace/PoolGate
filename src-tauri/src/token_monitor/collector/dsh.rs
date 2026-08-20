@@ -131,11 +131,7 @@ fn decompress_zstd(path: &std::path::Path) -> Result<String, CollectorError> {
 /// **cache 口径（对齐 xiaomi 官方用量）**：`cacheReadTokens` 是该请求本次从缓存读取的
 /// 上下文量（随对话增长而增大，属「每请求重读即计费」的缓存用量），官方网站按每请求
 /// 原始值直接求和。因此这里**不做增量**，直接记录原始值，total = input + output + cacheRead。
-fn extract_events(
-    tool_id: &str,
-    lines: &[&str],
-    source_id: &str,
-) -> Vec<NormalizedUsageEvent> {
+fn extract_events(tool_id: &str, lines: &[&str], source_id: &str) -> Vec<NormalizedUsageEvent> {
     let mut events = Vec::new();
     let mut session_id: Option<String> = None;
     let mut model: Option<String> = None;
@@ -156,7 +152,10 @@ fn extract_events(
             }
             "request/header" => {
                 if let Some(config) = value.pointer("/data/header/config") {
-                    let provider = config.get("provider").and_then(|v| v.as_str()).unwrap_or("");
+                    let provider = config
+                        .get("provider")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
                     let model_name = config.get("model").and_then(|v| v.as_str()).unwrap_or("");
                     if !model_name.is_empty() {
                         model = Some(if provider.is_empty() {
@@ -169,8 +168,14 @@ fn extract_events(
             }
             "request/context" => {
                 if model.is_none() {
-                    let provider = value.pointer("/data/provider").and_then(|v| v.as_str()).unwrap_or("");
-                    let model_name = value.pointer("/data/model").and_then(|v| v.as_str()).unwrap_or("");
+                    let provider = value
+                        .pointer("/data/provider")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    let model_name = value
+                        .pointer("/data/model")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
                     if !model_name.is_empty() {
                         model = Some(if provider.is_empty() {
                             model_name.to_string()
@@ -291,7 +296,10 @@ fn extract_session_info(
             }
             "request/header" => {
                 if let Some(config) = value.pointer("/data/header/config") {
-                    let provider = config.get("provider").and_then(|v| v.as_str()).unwrap_or("");
+                    let provider = config
+                        .get("provider")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
                     let model_name = config.get("model").and_then(|v| v.as_str()).unwrap_or("");
                     if !model_name.is_empty() {
                         model = Some(if provider.is_empty() {
@@ -344,8 +352,7 @@ fn extract_session_info(
                             total_tokens += input + output + cache;
                             message_count += 1;
                             if time > 0 {
-                                last_active_at =
-                                    Some(last_active_at.map_or(time, |l| l.max(time)));
+                                last_active_at = Some(last_active_at.map_or(time, |l| l.max(time)));
                             }
                         }
                     }
@@ -383,9 +390,7 @@ fn extract_session_info(
         tool_id: "dsh".into(),
         external_session_id: session_id,
         project_id: project_path.as_deref().map(hash_short),
-        title_redacted: Some(format!(
-            "DSH · {workspace} · {session_label} · {date_tag}"
-        )),
+        title_redacted: Some(format!("DSH · {workspace} · {session_label} · {date_tag}")),
         model_set: model_set.into_iter().collect(),
         started_at: started_at.map(iso_from_epoch_ms),
         last_active_at: last_active_at.map(iso_from_epoch_ms),
@@ -409,10 +414,9 @@ impl ToolAdapter for DshAdapter {
             support_level: SupportLevel::Basic,
             supported_os: vec!["macos".into(), "linux".into(), "windows".into()],
             adapter_version: 2, // v2：cacheReadTokens 改按每请求原始值记录（对齐 xiaomi 官方用量口径）
-            privacy_note:
-                "只读 ~/.dsh/sessions/ 下会话文件的 usage 元数据（tokens/模型/时间）；\
+            privacy_note: "只读 ~/.dsh/sessions/ 下会话文件的 usage 元数据（tokens/模型/时间）；\
                  不读取 Prompt/Response 正文；路径仅 hash 入库"
-                    .into(),
+                .into(),
         }
     }
 
@@ -592,7 +596,11 @@ mod tests {
             let lines: Vec<&str> = content.lines().collect();
 
             // 用同一份解压内容跑适配器提取（避免活文件两次解压结果不一致）
-            let events = extract_events("dsh", &lines, &format!("dsh:test:{}", hash_short(&path.to_string_lossy())));
+            let events = extract_events(
+                "dsh",
+                &lines,
+                &format!("dsh:test:{}", hash_short(&path.to_string_lossy())),
+            );
             adapter_total_events += events.len() as i64;
             for e in &events {
                 adapter_total_tokens += e.total_tokens.unwrap_or(0);
@@ -611,7 +619,10 @@ mod tests {
                 }
                 if event_type == "request/header" {
                     if let Some(config) = v.pointer("/data/header/config") {
-                        let provider = config.get("provider").and_then(|x| x.as_str()).unwrap_or("");
+                        let provider = config
+                            .get("provider")
+                            .and_then(|x| x.as_str())
+                            .unwrap_or("");
                         let model_name = config.get("model").and_then(|x| x.as_str()).unwrap_or("");
                         if !model_name.is_empty() {
                             models.insert(format!("{provider}/{model_name}"));
@@ -619,8 +630,14 @@ mod tests {
                     }
                 }
                 if event_type == "request/context" {
-                    let provider = v.pointer("/data/provider").and_then(|x| x.as_str()).unwrap_or("");
-                    let model_name = v.pointer("/data/model").and_then(|x| x.as_str()).unwrap_or("");
+                    let provider = v
+                        .pointer("/data/provider")
+                        .and_then(|x| x.as_str())
+                        .unwrap_or("");
+                    let model_name = v
+                        .pointer("/data/model")
+                        .and_then(|x| x.as_str())
+                        .unwrap_or("");
                     if !model_name.is_empty() {
                         models.insert(format!("{provider}/{model_name}"));
                     }
@@ -629,10 +646,22 @@ mod tests {
                     if let Some(chunk) = v.get("data").and_then(|d| d.get("chunk")) {
                         if chunk.get("type").and_then(|x| x.as_str()) == Some("usage") {
                             if let Some(usage) = chunk.get("usage") {
-                                let input = usage.get("inputTokens").and_then(|x| x.as_i64()).unwrap_or(0);
-                                let output = usage.get("outputTokens").and_then(|x| x.as_i64()).unwrap_or(0);
-                                let cache = usage.get("cacheReadTokens").and_then(|x| x.as_i64()).unwrap_or(0);
-                                let reasoning = usage.get("reasoningTokens").and_then(|x| x.as_i64()).unwrap_or(0);
+                                let input = usage
+                                    .get("inputTokens")
+                                    .and_then(|x| x.as_i64())
+                                    .unwrap_or(0);
+                                let output = usage
+                                    .get("outputTokens")
+                                    .and_then(|x| x.as_i64())
+                                    .unwrap_or(0);
+                                let cache = usage
+                                    .get("cacheReadTokens")
+                                    .and_then(|x| x.as_i64())
+                                    .unwrap_or(0);
+                                let reasoning = usage
+                                    .get("reasoningTokens")
+                                    .and_then(|x| x.as_i64())
+                                    .unwrap_or(0);
                                 total_usage_events += 1;
                                 total_input += input;
                                 total_output += output;
@@ -657,22 +686,36 @@ mod tests {
         println!("Usage 事件数: {}", total_usage_events);
         println!("  inputTokens:      {:>12}", total_input);
         println!("  outputTokens:     {:>12}", total_output);
-        println!("  cacheReadTokens:  {:>12}（每请求缓存读取原值，官方口径直接求和）", total_cache);
+        println!(
+            "  cacheReadTokens:  {:>12}（每请求缓存读取原值，官方口径直接求和）",
+            total_cache
+        );
         println!("  reasoningTokens:  {:>12}", total_reasoning);
         println!("  total (in+out+cache): {:>8}", grand_total);
         println!();
         println!("--- 适配器采集（原始 cache 口径，同一份输入） ---");
         println!("事件数: {}", adapter_total_events);
-        println!("总 tokens: {}（input + output + cacheRead 原值求和）", adapter_total_tokens);
+        println!(
+            "总 tokens: {}（input + output + cacheRead 原值求和）",
+            adapter_total_tokens
+        );
 
         assert!(total_usage_events > 0, "未采集到任何 usage 事件");
         assert!(adapter_total_tokens > 0, "适配器 token 总数为 0");
-        assert_eq!(adapter_total_events, total_usage_events, "适配器事件数与原始解析不一致");
+        assert_eq!(
+            adapter_total_events, total_usage_events,
+            "适配器事件数与原始解析不一致"
+        );
         // 适配器按原始 cache 求和，应与原始解析完全一致（对齐官方口径）
-        assert_eq!(adapter_total_tokens, grand_total,
+        assert_eq!(
+            adapter_total_tokens, grand_total,
             "适配器 token 总数 {} 应与原始解析 {} 一致（原始 cache 口径）",
-            adapter_total_tokens, grand_total);
+            adapter_total_tokens, grand_total
+        );
         println!();
-        println!("✅ 验证通过：DSH 适配器可正确采集 {} 个 usage 事件，共 {} tokens（原始 cache 口径）", total_usage_events, adapter_total_tokens);
+        println!(
+            "✅ 验证通过：DSH 适配器可正确采集 {} 个 usage 事件，共 {} tokens（原始 cache 口径）",
+            total_usage_events, adapter_total_tokens
+        );
     }
 }

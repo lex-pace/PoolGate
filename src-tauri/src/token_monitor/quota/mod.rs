@@ -196,18 +196,18 @@ pub struct ConnectorRegistry;
 impl ConnectorRegistry {
     pub fn get(provider_id: &str) -> Option<Box<dyn QuotaConnector>> {
         match provider_id {
-            "antigravity" => Some(Box::new(antigravity::AntigravityConnector::default())),
-            "claude" => Some(Box::new(claude::ClaudeConnector::default())),
-            "codex" => Some(Box::new(openai_codex::CodexConnector::default())),
-            "cursor" => Some(Box::new(cursor::CursorConnector::default())),
-            "custom" => Some(Box::new(custom::CustomConnector::default())),
-            "deepseek" => Some(Box::new(deepseek::DeepSeekConnector::default())),
-            "github_copilot" => Some(Box::new(github_copilot::CopilotConnector::default())),
-            "minimax" => Some(Box::new(minimax::MinimaxConnector::default())),
-            "ollama_cloud" => Some(Box::new(ollama_cloud::OllamaCloudConnector::default())),
-            "openrouter" => Some(Box::new(openrouter::OpenRouterConnector::default())),
-            "qoder" => Some(Box::new(qoder::QoderConnector::default())),
-            "volcengine_ark" => Some(Box::new(volcengine_ark::VolcengineArkConnector::default())),
+            "antigravity" => Some(Box::new(antigravity::AntigravityConnector)),
+            "claude" => Some(Box::new(claude::ClaudeConnector)),
+            "codex" => Some(Box::new(openai_codex::CodexConnector)),
+            "cursor" => Some(Box::new(cursor::CursorConnector)),
+            "custom" => Some(Box::new(custom::CustomConnector)),
+            "deepseek" => Some(Box::new(deepseek::DeepSeekConnector)),
+            "github_copilot" => Some(Box::new(github_copilot::CopilotConnector)),
+            "minimax" => Some(Box::new(minimax::MinimaxConnector)),
+            "ollama_cloud" => Some(Box::new(ollama_cloud::OllamaCloudConnector)),
+            "openrouter" => Some(Box::new(openrouter::OpenRouterConnector)),
+            "qoder" => Some(Box::new(qoder::QoderConnector)),
+            "volcengine_ark" => Some(Box::new(volcengine_ark::VolcengineArkConnector)),
             // ==== connector registry ====  (新 Provider 在此锚点后按字典序追加)
             _ => None,
         }

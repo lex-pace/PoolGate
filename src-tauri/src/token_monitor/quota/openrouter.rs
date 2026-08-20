@@ -30,7 +30,7 @@ impl QuotaConnector for OpenRouterConnector {
     }
 
     async fn validate(&self, credential_ref: &str) -> Result<AccountProfile, QuotaError> {
-        let data = self.fetch_key(&credential_ref).await?;
+        let data = self.fetch_key(credential_ref).await?;
         Ok(AccountProfile {
             identity_masked: data
                 .get("label")

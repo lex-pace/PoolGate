@@ -270,7 +270,7 @@ mod tests {
 
     #[test]
     fn claude_code_incremental_is_idempotent() {
-        let adapter = ClaudeCodeAdapter::default();
+        let adapter = ClaudeCodeAdapter;
         let src = fixture("session_basic.jsonl");
         let r1 = adapter
             .collect_incremental(&src, CollectorCheckpoint::default())
@@ -340,7 +340,7 @@ mod tests {
 
     #[test]
     fn claude_code_missing_file_is_error_not_panic() {
-        let adapter = ClaudeCodeAdapter::default();
+        let adapter = ClaudeCodeAdapter;
         let src = DataSource {
             id: "x".into(),
             path: PathBuf::from("/nonexistent/xyz.jsonl"),
@@ -354,7 +354,7 @@ mod tests {
     #[test]
     fn claude_code_generates_stable_fingerprints() {
         // fingerprint 由 dedup 层基于事件内容生成；这里验证两行 usage 均非空事件
-        let adapter = ClaudeCodeAdapter::default();
+        let adapter = ClaudeCodeAdapter;
         let src = fixture("session_basic.jsonl");
         let r1 = adapter
             .collect_incremental(&src, CollectorCheckpoint::default())

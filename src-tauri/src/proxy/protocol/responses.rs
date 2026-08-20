@@ -198,7 +198,8 @@ pub fn forward_responses_sse_with_context(
                 }
             };
             crate::proxy::stream::collect_sse_usage(&chunk, &mut usage_buffer, &mut usage);
-            let (events, stream_error, done) = normalize_sse_stream(&protocols, &chunk, &mut buffer);
+            let (events, stream_error, done) =
+                normalize_sse_stream(&protocols, &chunk, &mut buffer);
             for event in events {
                 if tx.send(event).await.is_err() {
                     completion_error = Some("downstream disconnected before SSE completion".into());
@@ -241,22 +242,15 @@ pub fn forward_responses_sse_with_context(
                 // object, so cache tokens survive the protocol hop.
                 let mut response = serde_json::Map::new();
                 if usage.available {
-                    response.insert(
-                        "usage".into(),
-                        usage.to_responses_usage_json(),
-                    );
+                    response.insert("usage".into(), usage.to_responses_usage_json());
                 }
                 let payload = serde_json::json!({
                     "type": "response.completed",
                     "response": serde_json::Value::Object(response),
                 });
-                let event = format!(
-                    "event: response.completed\ndata: {}\n\n",
-                    payload
-                );
+                let event = format!("event: response.completed\ndata: {}\n\n", payload);
                 if tx.send(bytes::Bytes::from(event)).await.is_err() {
-                    completion_error =
-                        Some("downstream disconnected before SSE completion".into());
+                    completion_error = Some("downstream disconnected before SSE completion".into());
                 }
             }
         }
@@ -532,8 +526,7 @@ mod tests {
         assert!(events.is_empty());
         assert!(error.is_none());
         assert!(!done);
-        let (events, error, done) =
-            normalize_sse_stream(&protocols, b"lo\"}}]}\n\n", &mut buffer);
+        let (events, error, done) = normalize_sse_stream(&protocols, b"lo\"}}]}\n\n", &mut buffer);
         assert_eq!(events.len(), 1);
         assert!(error.is_none());
         assert!(!done);

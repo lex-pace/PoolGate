@@ -58,16 +58,19 @@ fn assert_collects(adapter: &dyn ToolAdapter, min_events: usize) {
 #[test]
 #[ignore]
 fn real_claude_code() {
-    assert_collects(&claude_code::ClaudeCodeAdapter::default(), 1);
+    assert_collects(&claude_code::ClaudeCodeAdapter, 1);
 }
 
 #[test]
 #[ignore]
 fn real_freebuff() {
     // 本机 Freebuff 工作区 `.freebuff/desktop-v2.db`；无则打印跳过。
-    let adapter = freebuff::FreebuffAdapter::default();
+    let adapter = freebuff::FreebuffAdapter;
     let (events, sources) = collect_all(&adapter);
-    println!("[real] freebuff: {sources} sources, {} events", events.len());
+    println!(
+        "[real] freebuff: {sources} sources, {} events",
+        events.len()
+    );
     if events.is_empty() {
         println!("[real] freebuff: 未发现 Freebuff 数据库 — 跳过断言");
         return;
@@ -76,8 +79,8 @@ fn real_freebuff() {
     let by_model: BTreeMap<String, i64> = {
         let mut m = BTreeMap::new();
         for e in &events {
-            *m.entry(e.model_raw.clone().unwrap_or_default()).or_insert(0i64) +=
-                e.total_tokens.unwrap_or(0);
+            *m.entry(e.model_raw.clone().unwrap_or_default())
+                .or_insert(0i64) += e.total_tokens.unwrap_or(0);
         }
         m
     };
@@ -87,13 +90,11 @@ fn real_freebuff() {
     }
     // 会话摘要应能产出（threads 表存在）
     for source in adapter.discover() {
-        if let Ok(r) =
-            adapter.collect_incremental(&source, adapter.checkpoint(&source.id))
-        {
+        if let Ok(r) = adapter.collect_incremental(&source, adapter.checkpoint(&source.id)) {
             println!("[real] freebuff: {} sessions", r.sessions.len());
         }
     }
-    assert!(events.len() >= 1, "freebuff 应至少产出 1 条事件");
+    assert!(!events.is_empty(), "freebuff 应至少产出 1 条事件");
 }
 
 /// 复现线上 bug（W12 扫描添加冷门 Agent）：Freebuff 事件被 tokscale 快照替换清空，
@@ -139,11 +140,11 @@ fn real_freebuff_backfill_on_real_db_copy() {
     };
     println!("[real] backfill: NULL rows before = {before}");
 
-    let adapter = freebuff::FreebuffAdapter::default();
+    let adapter = freebuff::FreebuffAdapter;
     let mut total_fixed = 0usize;
     for source in adapter.discover() {
-        let fixed = freebuff::backfill_missing_models(&database.conn, &source)
-            .unwrap_or_else(|e| {
+        let fixed =
+            freebuff::backfill_missing_models(&database.conn, &source).unwrap_or_else(|e| {
                 eprintln!("[real] backfill err {}: {e}", source.path.display());
                 0
             });
@@ -179,7 +180,10 @@ fn real_freebuff_backfill_on_real_db_copy() {
         .unwrap_or(0)
     };
     println!("[real] backfill: freebuff claude-code harness rows after = {harness_after}");
-    assert_eq!(harness_after, 0, "freebuff 不应残留 claude-code harness 线程");
+    assert_eq!(
+        harness_after, 0,
+        "freebuff 不应残留 claude-code harness 线程"
+    );
 
     // atomcode：对真实 datalog 源跑回填（早期 env 正则无 session 不匹配 → model 缺失）
     let atom_before: i64 = {
@@ -194,7 +198,7 @@ fn real_freebuff_backfill_on_real_db_copy() {
     };
     println!("[real] atomcode backfill: NULL rows before = {atom_before}");
     let mut atom_fixed = 0usize;
-    for source in atomcode::AtomCodeAdapter::default().discover() {
+    for source in atomcode::AtomCodeAdapter.discover() {
         atom_fixed += atomcode::backfill_missing_models(&database.conn, &source).unwrap_or(0);
     }
     let atom_after: i64 = {
@@ -207,9 +211,7 @@ fn real_freebuff_backfill_on_real_db_copy() {
         )
         .expect("atom count after")
     };
-    println!(
-        "[real] atomcode backfill: fixed {atom_fixed}, NULL rows after = {atom_after}"
-    );
+    println!("[real] atomcode backfill: fixed {atom_fixed}, NULL rows after = {atom_after}");
     if atom_before > 0 {
         assert_eq!(atom_after, 0, "回填应清零 atomcode 的 NULL 模型行");
     }
@@ -237,9 +239,12 @@ fn real_freebuff_survives_tokscale_snapshot_replace() {
     .expect("migrate 019");
     let db = Mutex::new(conn);
 
-    let adapter = freebuff::FreebuffAdapter::default();
+    let adapter = freebuff::FreebuffAdapter;
     let (events, sources) = collect_all(&adapter);
-    println!("[real] freebuff e2e: {sources} sources, {} events", events.len());
+    println!(
+        "[real] freebuff e2e: {sources} sources, {} events",
+        events.len()
+    );
     if events.is_empty() {
         println!("[real] freebuff e2e: 未发现 Freebuff 数据库 — 跳过");
         return;
@@ -268,25 +273,25 @@ fn real_freebuff_survives_tokscale_snapshot_replace() {
 #[test]
 #[ignore]
 fn real_codex() {
-    assert_collects(&codex::CodexAdapter::default(), 1);
+    assert_collects(&codex::CodexAdapter, 1);
 }
 
 #[test]
 #[ignore]
 fn real_workbuddy() {
-    assert_collects(&workbuddy::WorkbuddyAdapter::default(), 1);
+    assert_collects(&workbuddy::WorkbuddyAdapter, 1);
 }
 
 #[test]
 #[ignore]
 fn real_opencode() {
-    assert_collects(&opencode::OpenCodeAdapter::default(), 1);
+    assert_collects(&opencode::OpenCodeAdapter, 1);
 }
 
 #[test]
 #[ignore]
 fn real_zcode() {
-    assert_collects(&zcode::ZcodeAdapter::default(), 1);
+    assert_collects(&zcode::ZcodeAdapter, 1);
 }
 
 #[test]
@@ -326,7 +331,7 @@ fn real_tokscale_e2e_into_migrated_db() {
     .expect("migrate 019");
     let db = Mutex::new(conn);
 
-    let adapter = tokscale::TokscaleAdapter::default();
+    let adapter = tokscale::TokscaleAdapter;
     let mut events = Vec::new();
     for source in adapter.discover() {
         match adapter.collect_incremental(&source, adapter.checkpoint(&source.id)) {
@@ -377,7 +382,7 @@ fn real_tokscale_e2e_into_migrated_db() {
 #[ignore]
 fn real_tokscale_aggregate_matches_opensource() {
     // 复刻开源 Token Monitor 采集引擎：tokscale 全量扫描 → 事件 → 总量/模型分布
-    let adapter = tokscale::TokscaleAdapter::default();
+    let adapter = tokscale::TokscaleAdapter;
     let mut events = Vec::new();
     for source in adapter.discover() {
         match adapter.collect_incremental(&source, adapter.checkpoint(&source.id)) {
@@ -408,7 +413,7 @@ fn real_tokscale_aggregate_matches_opensource() {
     for (m, n) in by_model {
         println!("[real] tokscale: model {m} = {n}");
     }
-    assert!(events.len() >= 1, "tokscale 应至少产出 1 条事件");
+    assert!(!events.is_empty(), "tokscale 应至少产出 1 条事件");
 }
 
 #[test]

@@ -266,51 +266,6 @@ fn render_config(
     }
 }
 
-#[cfg(test)]
-mod config_tests {
-    use super::render_config;
-
-    #[test]
-    fn codex_uses_versioned_responses_base_url() {
-        let rendered = render_config(
-            "codex",
-            b"model = \"gpt-test\"\n",
-            "http://127.0.0.1:9800",
-            "pg_live_test",
-        )
-        .unwrap();
-        let text = String::from_utf8(rendered).unwrap();
-        assert!(text.contains("base_url = \"http://127.0.0.1:9800/v1\""));
-        assert!(text.contains("wire_api = \"responses\""));
-        assert!(text.contains("requires_openai_auth = false"));
-    }
-
-    #[test]
-    fn claude_uses_unversioned_anthropic_base_url() {
-        let rendered = render_config(
-            "claude_code",
-            b"{}",
-            "http://127.0.0.1:9800",
-            "pg_live_test",
-        )
-        .unwrap();
-        let value: serde_json::Value = serde_json::from_slice(&rendered).unwrap();
-        assert_eq!(value["env"]["ANTHROPIC_BASE_URL"], "http://127.0.0.1:9800");
-        assert_eq!(value["env"]["ANTHROPIC_AUTH_TOKEN"], "pg_live_test");
-    }
-
-    #[test]
-    fn opencode_uses_versioned_openai_base_url() {
-        let rendered =
-            render_config("opencode", b"{}", "http://127.0.0.1:9800", "pg_live_test").unwrap();
-        let value: serde_json::Value = serde_json::from_slice(&rendered).unwrap();
-        assert_eq!(
-            value["provider"]["poolgate"]["options"]["baseURL"],
-            "http://127.0.0.1:9800/v1"
-        );
-    }
-}
-
 fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
     let parent = path
         .parent()
@@ -419,4 +374,49 @@ pub fn restore(state: &AppState, snapshot_id: &str, force: bool) -> Result<(), S
     )
     .map_err(|error| error.to_string())?;
     Ok(())
+}
+
+#[cfg(test)]
+mod config_tests {
+    use super::render_config;
+
+    #[test]
+    fn codex_uses_versioned_responses_base_url() {
+        let rendered = render_config(
+            "codex",
+            b"model = \"gpt-test\"\n",
+            "http://127.0.0.1:9800",
+            "pg_live_test",
+        )
+        .unwrap();
+        let text = String::from_utf8(rendered).unwrap();
+        assert!(text.contains("base_url = \"http://127.0.0.1:9800/v1\""));
+        assert!(text.contains("wire_api = \"responses\""));
+        assert!(text.contains("requires_openai_auth = false"));
+    }
+
+    #[test]
+    fn claude_uses_unversioned_anthropic_base_url() {
+        let rendered = render_config(
+            "claude_code",
+            b"{}",
+            "http://127.0.0.1:9800",
+            "pg_live_test",
+        )
+        .unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&rendered).unwrap();
+        assert_eq!(value["env"]["ANTHROPIC_BASE_URL"], "http://127.0.0.1:9800");
+        assert_eq!(value["env"]["ANTHROPIC_AUTH_TOKEN"], "pg_live_test");
+    }
+
+    #[test]
+    fn opencode_uses_versioned_openai_base_url() {
+        let rendered =
+            render_config("opencode", b"{}", "http://127.0.0.1:9800", "pg_live_test").unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&rendered).unwrap();
+        assert_eq!(
+            value["provider"]["poolgate"]["options"]["baseURL"],
+            "http://127.0.0.1:9800/v1"
+        );
+    }
 }

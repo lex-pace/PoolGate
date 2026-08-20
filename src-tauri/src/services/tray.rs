@@ -347,11 +347,35 @@ fn build_monitor_tray_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu
         None::<&str>,
     )?)?;
     menu.append(&PredefinedMenuItem::separator(app)?)?;
-    menu.append(&MenuItem::with_id(app, "refresh_tray", "刷新监控数据", true, None::<&str>)?)?;
-    menu.append(&MenuItem::with_id(app, "show_tray_card", "显示 Monitor 托盘", true, None::<&str>)?)?;
-    menu.append(&MenuItem::with_id(app, "show_window", "打开 Monitor 仪表盘", true, None::<&str>)?)?;
+    menu.append(&MenuItem::with_id(
+        app,
+        "refresh_tray",
+        "刷新监控数据",
+        true,
+        None::<&str>,
+    )?)?;
+    menu.append(&MenuItem::with_id(
+        app,
+        "show_tray_card",
+        "显示 Monitor 托盘",
+        true,
+        None::<&str>,
+    )?)?;
+    menu.append(&MenuItem::with_id(
+        app,
+        "show_window",
+        "打开 Monitor 仪表盘",
+        true,
+        None::<&str>,
+    )?)?;
     menu.append(&PredefinedMenuItem::separator(app)?)?;
-    menu.append(&MenuItem::with_id(app, "quit", "退出 PoolGate", true, Some("CmdOrCtrl+Q"))?)?;
+    menu.append(&MenuItem::with_id(
+        app,
+        "quit",
+        "退出 PoolGate",
+        true,
+        Some("CmdOrCtrl+Q"),
+    )?)?;
     Ok(menu)
 }
 
@@ -822,10 +846,9 @@ pub(crate) fn toggle_tray_window<R: Runtime>(
                             payload,
                         );
                     }
-                    Err(error) => tracing::warn!(
-                        "Unable to resolve tray appearance theme: {}",
-                        error
-                    ),
+                    Err(error) => {
+                        tracing::warn!("Unable to resolve tray appearance theme: {}", error)
+                    }
                 }
             }
         })
@@ -1287,11 +1310,7 @@ fn tray_acrylic_tint<R: Runtime>(
     } else {
         (246, 248, 252, 112)
     };
-    let alpha = match state
-        .db
-        .settings
-        .get(&state.db.conn, GLASS_OPACITY)?
-    {
+    let alpha = match state.db.settings.get(&state.db.conn, GLASS_OPACITY)? {
         Some(raw) => raw
             .parse::<f64>()
             .ok()

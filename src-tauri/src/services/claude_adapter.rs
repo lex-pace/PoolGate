@@ -133,60 +133,58 @@ pub fn prepare_messages_body(body: &Value, _stream: bool) -> Value {
             .and_then(|blocks| blocks.first())
             .and_then(|block| block.get("text"))
             .and_then(Value::as_str)
-            .is_some_and(|text| {
-                text.starts_with(CLAUDE_CODE_SYSTEM_PREFIX)
-            });
+            .is_some_and(|text| text.starts_with(CLAUDE_CODE_SYSTEM_PREFIX));
         if !already_prefixed {
             match object.get("system") {
-            Some(existing) => {
-                // Existing system field: prepend the prefix.
-                let prefix_block = serde_json::json!({
-                    "type": "text",
-                    "text": CLAUDE_CODE_SYSTEM_PREFIX
-                });
+                Some(existing) => {
+                    // Existing system field: prepend the prefix.
+                    let prefix_block = serde_json::json!({
+                        "type": "text",
+                        "text": CLAUDE_CODE_SYSTEM_PREFIX
+                    });
 
-                let new_system = match existing {
-                    Value::String(s) => {
-                        // Simple string system prompt: convert to array with prefix first.
-                        serde_json::json!([
-                            prefix_block,
-                            {
-                                "type": "text",
-                                "text": s
-                            }
-                        ])
-                    }
-                    Value::Array(arr) => {
-                        // Array of system blocks: prepend prefix block.
-                        let mut new_arr = vec![prefix_block];
-                        new_arr.extend(arr.clone());
-                        Value::Array(new_arr)
-                    }
-                    _ => {
-                        // Other types: wrap as text block after prefix.
-                        serde_json::json!([
-                            prefix_block,
-                            {
-                                "type": "text",
-                                "text": existing.to_string()
-                            }
-                        ])
-                    }
-                };
-                object.insert("system".into(), new_system);
-            }
-            None => {
-                // No system field: create one with just the prefix.
-                object.insert(
-                    "system".into(),
-                    serde_json::json!([
-                        {
-                            "type": "text",
-                            "text": CLAUDE_CODE_SYSTEM_PREFIX
+                    let new_system = match existing {
+                        Value::String(s) => {
+                            // Simple string system prompt: convert to array with prefix first.
+                            serde_json::json!([
+                                prefix_block,
+                                {
+                                    "type": "text",
+                                    "text": s
+                                }
+                            ])
                         }
-                    ]),
-                );
-            }
+                        Value::Array(arr) => {
+                            // Array of system blocks: prepend prefix block.
+                            let mut new_arr = vec![prefix_block];
+                            new_arr.extend(arr.clone());
+                            Value::Array(new_arr)
+                        }
+                        _ => {
+                            // Other types: wrap as text block after prefix.
+                            serde_json::json!([
+                                prefix_block,
+                                {
+                                    "type": "text",
+                                    "text": existing.to_string()
+                                }
+                            ])
+                        }
+                    };
+                    object.insert("system".into(), new_system);
+                }
+                None => {
+                    // No system field: create one with just the prefix.
+                    object.insert(
+                        "system".into(),
+                        serde_json::json!([
+                            {
+                                "type": "text",
+                                "text": CLAUDE_CODE_SYSTEM_PREFIX
+                            }
+                        ]),
+                    );
+                }
             }
         }
 

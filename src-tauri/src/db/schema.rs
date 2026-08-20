@@ -249,7 +249,12 @@ mod token_monitor_migrations {
             .expect("query pragma")
             .collect::<Result<Vec<_>, _>>()
             .expect("collect pragma");
-        for col in ["tool_id", "display_name", "custom_paths_json", "custom_fields_json"] {
+        for col in [
+            "tool_id",
+            "display_name",
+            "custom_paths_json",
+            "custom_fields_json",
+        ] {
             assert!(
                 tool_cols.contains(&col.to_string()),
                 "missing tool_definition column {col}"

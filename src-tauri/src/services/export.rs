@@ -209,18 +209,6 @@ fn mask_api_key(key: &str) -> String {
     format!("****{}", suffix)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::mask_api_key;
-
-    #[test]
-    fn short_keys_are_never_returned_verbatim() {
-        assert_eq!(mask_api_key("abc"), "****");
-        assert_ne!(mask_api_key("secret7"), "secret7");
-        assert_eq!(mask_api_key("sk-123456789"), "****6789");
-    }
-}
-
 fn parse_models(models: &Option<String>) -> Vec<String> {
     models
         .as_ref()
@@ -242,4 +230,16 @@ fn parse_tags(tags: &Option<String>) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::mask_api_key;
+
+    #[test]
+    fn short_keys_are_never_returned_verbatim() {
+        assert_eq!(mask_api_key("abc"), "****");
+        assert_ne!(mask_api_key("secret7"), "secret7");
+        assert_eq!(mask_api_key("sk-123456789"), "****6789");
+    }
 }

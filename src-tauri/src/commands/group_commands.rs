@@ -1216,7 +1216,7 @@ pub fn get_route_topology(state: State<'_, Arc<AppState>>) -> Result<RouteTopolo
             id: format!("provider-{}-account-{}", account.provider_id, account.id),
             source: format!("provider-{}", account.provider_id),
             target: format!("account-{}", account.id),
-            status: account_topology_status(&account).into(),
+            status: account_topology_status(account).into(),
             active: false,
             active_requests: 0,
         });

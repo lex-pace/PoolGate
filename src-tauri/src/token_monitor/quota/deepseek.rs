@@ -103,7 +103,11 @@ impl DeepSeekConnector {
             resets_at: None,
             source: QuotaSource::OfficialApi,
             confidence: QuotaConfidence::Reported,
-            error_code: if is_available { None } else { Some("insufficient_balance".into()) },
+            error_code: if is_available {
+                None
+            } else {
+                Some("insufficient_balance".into())
+            },
             fetched_at: now_iso(),
             expires_at: None,
         }])
@@ -132,7 +136,10 @@ impl DeepSeekConnector {
 
     /// 数字字段可能为 JSON 数字或字符串数字，统一解析。
     fn as_f64(v: Option<&Value>) -> Option<f64> {
-        v.and_then(|v| v.as_f64().or_else(|| v.as_str().and_then(|s| s.parse::<f64>().ok())))
+        v.and_then(|v| {
+            v.as_f64()
+                .or_else(|| v.as_str().and_then(|s| s.parse::<f64>().ok()))
+        })
     }
 }
 

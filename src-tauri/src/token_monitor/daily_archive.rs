@@ -40,10 +40,7 @@ fn write_archive(conn: &Mutex<Connection>, days: &BTreeMap<String, TrendDay>) {
 }
 
 /// 把当前 live 日并入归档（按日保留 tokens 更大的观测），返回是否有变化。
-fn capture_into_archive(
-    archive: &mut BTreeMap<String, TrendDay>,
-    series: &TrendSeries,
-) -> bool {
+fn capture_into_archive(archive: &mut BTreeMap<String, TrendDay>, series: &TrendSeries) -> bool {
     let mut changed = false;
     for day in &series.daily {
         if day.tokens <= 0 {
@@ -80,11 +77,7 @@ pub(crate) fn merge_and_capture(
     }
 
     // 归档里「live 已丢失」的日补回（源文件清理后活跃天数不缩水）。
-    let live: HashSet<String> = series
-        .daily
-        .iter()
-        .map(|d| d.date.clone())
-        .collect();
+    let live: HashSet<String> = series.daily.iter().map(|d| d.date.clone()).collect();
     let mut added_messages = 0i64;
     for (date, day) in &archive {
         if day.tokens <= 0 || live.contains(date) {
@@ -129,7 +122,11 @@ pub(crate) fn merge_and_capture(
     }
 
     // 活跃时间：timeMetrics 总时长 vs 合并后逐日之和，取较大者（对齐开源 graphTimeMetrics）。
-    let sum_active = series.daily.iter().map(|d| d.active_time_ms.max(0)).sum::<i64>();
+    let sum_active = series
+        .daily
+        .iter()
+        .map(|d| d.active_time_ms.max(0))
+        .sum::<i64>();
     series.active_days = active_days;
     series.streak_days = streak_days;
     series.peak_day = peak_day;
@@ -248,15 +245,14 @@ fn convert_token_monitor_day(date: &str, day: &serde_json::Value) -> Option<Tren
 
         if let Some(client) = obs.get("client").and_then(|v| v.as_str()) {
             if !client.is_empty() {
-                let tool_id =
-                    crate::token_monitor::collector::tokscale::tool_id_for_client(client);
+                let tool_id = crate::token_monitor::collector::tokscale::tool_id_for_client(client);
                 *per_client.entry(tool_id).or_default() += t;
             }
         }
         if let Some(model) = obs.get("modelId").and_then(|v| v.as_str()) {
             if !model.is_empty() {
-                let canonical = crate::token_monitor::normalization::alias_model(model)
-                    .unwrap_or(model);
+                let canonical =
+                    crate::token_monitor::normalization::alias_model(model).unwrap_or(model);
                 *per_model.entry(canonical.to_string()).or_default() += t;
             }
         }
@@ -357,10 +353,7 @@ mod tests {
         let today = local_today();
         let yesterday = prev_local_day(&today);
         let mut series = TrendSeries {
-            daily: vec![
-                day(&yesterday, 100, 60_000),
-                day(&today, 200, 120_000),
-            ],
+            daily: vec![day(&yesterday, 100, 60_000), day(&today, 200, 120_000)],
             active_days: 2,
             streak_days: 2,
             peak_day: Some(day(&today, 200, 120_000)),

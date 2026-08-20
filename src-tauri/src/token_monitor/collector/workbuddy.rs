@@ -75,7 +75,7 @@ mod tests {
 
     #[test]
     fn workbuddy_parses_provider_data_usage() {
-        let adapter = WorkbuddyAdapter::default();
+        let adapter = WorkbuddyAdapter;
         let src = DataSource {
             id: "workbuddy:test".into(),
             path: PathBuf::from("tests/fixtures/workbuddy/session_usage.jsonl"),
@@ -105,7 +105,7 @@ mod tests {
     fn workbuddy_emits_session_summary_per_file() {
         // W7 回归：WorkBuddy 会话必须出现在会话列表（tm_session），此前 session=false 导致
         // 「今日有 WorkBuddy 用量但会话视图显示暂无会话」。
-        let adapter = WorkbuddyAdapter::default();
+        let adapter = WorkbuddyAdapter;
         let src = DataSource {
             id: "workbuddy:test".into(),
             path: PathBuf::from("tests/fixtures/workbuddy/session_usage.jsonl"),
@@ -129,7 +129,7 @@ mod tests {
     fn workbuddy_rebuilds_session_when_file_consumed_but_no_new_lines() {
         // 迁移场景：session=false 时文件已消费到 EOF（checkpoint 无 mtime），升级后
         // 无新行也应重建会话摘要（mtime 守卫：空闲轮询不再重复重建）。
-        let adapter = WorkbuddyAdapter::default();
+        let adapter = WorkbuddyAdapter;
         let src = DataSource {
             id: "workbuddy:test".into(),
             path: PathBuf::from("tests/fixtures/workbuddy/session_usage.jsonl"),
@@ -145,7 +145,10 @@ mod tests {
             .expect("recollect");
         assert!(r2.events.is_empty(), "无新行不重发事件");
         assert_eq!(r2.sessions.len(), 1, "无新行也应重建会话摘要（迁移补数）");
-        assert_eq!(r2.sessions[0].external_session_id.as_deref(), Some("session_usage"));
+        assert_eq!(
+            r2.sessions[0].external_session_id.as_deref(),
+            Some("session_usage")
+        );
         // 再采：mtime 未变 → 跳过重建（防事件风暴）
         let r3 = adapter
             .collect_incremental(&src, r2.next_checkpoint.clone())

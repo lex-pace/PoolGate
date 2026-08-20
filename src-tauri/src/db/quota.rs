@@ -351,7 +351,7 @@ impl QuotaWindowRepo {
             )
             .map_err(|e| e.to_string())?;
         let rows = stmt
-            .query_map(rusqlite::params![account_id], |row| snapshot_from_row(row))
+            .query_map(rusqlite::params![account_id], snapshot_from_row)
             .map_err(|e| e.to_string())?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| e.to_string())?;
@@ -373,7 +373,7 @@ impl QuotaWindowRepo {
             )
             .map_err(|e| e.to_string())?;
         let rows = stmt
-            .query_map([], |row| snapshot_from_row(row))
+            .query_map([], snapshot_from_row)
             .map_err(|e| e.to_string())?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| e.to_string())?;

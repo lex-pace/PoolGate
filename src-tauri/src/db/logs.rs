@@ -885,8 +885,7 @@ impl LogRepo {
 
         let period = "date(request_at, 'localtime')";
         let conn = conn.lock().map_err(|e| e.to_string())?;
-        let ranked_cte = format!(
-            "WITH ranked AS (
+        let ranked_cte = "WITH ranked AS (
                  SELECT *, ROW_NUMBER() OVER (
                      PARTITION BY COALESCE(request_id, 'legacy:' || id)
                      ORDER BY CASE WHEN source='gateway' THEN 1 ELSE 0 END DESC,
@@ -896,7 +895,7 @@ impl LogRepo {
                  WHERE datetime(request_at, 'localtime') >= ?1
                    AND datetime(request_at, 'localtime') < ?2
              )"
-        );
+        .to_string();
 
         // Compute summary inline using the same ranked CTE
         let summary_sql = format!(

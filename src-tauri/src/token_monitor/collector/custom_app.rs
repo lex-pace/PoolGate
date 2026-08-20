@@ -84,10 +84,7 @@ pub(crate) fn default_fields() -> CustomFields {
 }
 
 /// 从 tool_definition 读自定义应用的字段映射（缺省/NULL → 默认）。
-pub(crate) fn load_fields(
-    conn: &Mutex<rusqlite::Connection>,
-    tool_id: &str,
-) -> CustomFields {
+pub(crate) fn load_fields(conn: &Mutex<rusqlite::Connection>, tool_id: &str) -> CustomFields {
     let Ok(conn) = conn.lock() else {
         return default_fields();
     };
@@ -209,8 +206,7 @@ impl ToolAdapter for CustomAppAdapter {
             let occurred_at = common::pick(&value, &self.fields.ts)
                 .and_then(common::to_utc_iso)
                 .unwrap_or_else(|| {
-                    chrono::Utc::now()
-                        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+                    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
                 });
             let model_raw = common::pick(&value, &self.fields.model)
                 .and_then(|v| v.as_str())
@@ -296,9 +292,7 @@ pub(crate) fn is_custom_app(tool_id: &str) -> bool {
 }
 
 /// 解析自定义应用的有效路径（tool_definition 中 `custom:%` 且 enabled 的行）。
-pub(crate) fn load_custom_app_paths(
-    conn: &Mutex<rusqlite::Connection>,
-) -> Vec<(String, PathBuf)> {
+pub(crate) fn load_custom_app_paths(conn: &Mutex<rusqlite::Connection>) -> Vec<(String, PathBuf)> {
     let Ok(conn) = conn.lock() else {
         return Vec::new();
     };

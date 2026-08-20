@@ -366,7 +366,7 @@ mod tests {
 
     #[test]
     fn codex_incremental_is_idempotent_and_append_safe() {
-        let adapter = CodexAdapter::default();
+        let adapter = CodexAdapter;
         let src = fixture("session_basic.jsonl");
         let r1 = adapter
             .collect_incremental(&src, CollectorCheckpoint::default())
@@ -413,7 +413,7 @@ mod tests {
     fn codex_real_info_format_with_cross_line_model() {
         // 真实新格式：usage 在 event_msg.payload.info.total_token_usage，
         // model/cwd 在 turn_context 行（跨行追踪）
-        let adapter = CodexAdapter::default();
+        let adapter = CodexAdapter;
         let src = fixture("session_info.jsonl");
         let r1 = adapter
             .collect_incremental(&src, CollectorCheckpoint::default())
@@ -435,7 +435,7 @@ mod tests {
 
     #[test]
     fn codex_missing_file_returns_error() {
-        let adapter = CodexAdapter::default();
+        let adapter = CodexAdapter;
         let src = DataSource {
             id: "x".into(),
             path: PathBuf::from("/nonexistent/codex.jsonl"),

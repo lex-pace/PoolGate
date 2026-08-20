@@ -143,9 +143,7 @@ impl SessionRepo {
             // 成员表为空（旧库/采集未刷新）时回退旧日期口径，避免会话列表骤空。
             let member_ids: Vec<String> = {
                 let mut stmt = conn
-                    .prepare(
-                        "SELECT session_id FROM tm_period_session WHERE period=?1",
-                    )
+                    .prepare("SELECT session_id FROM tm_period_session WHERE period=?1")
                     .map_err(|e| e.to_string())?;
                 let ids = stmt
                     .query_map(rusqlite::params![range], |row| row.get(0))
@@ -294,8 +292,10 @@ impl SessionRepo {
                  GROUP BY tool_id, session_id
                  ORDER BY 5 DESC"
             );
-            let params: Vec<&dyn rusqlite::types::ToSql> =
-                tool_ids.iter().map(|t| &*t as &dyn rusqlite::types::ToSql).collect();
+            let params: Vec<&dyn rusqlite::types::ToSql> = tool_ids
+                .iter()
+                .map(|t| t as &dyn rusqlite::types::ToSql)
+                .collect();
             let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
             let rows = stmt
                 .query_map(params.as_slice(), |row| {
@@ -317,8 +317,7 @@ impl SessionRepo {
                         .as_deref()
                         .and_then(|ts| chrono::DateTime::parse_from_rfc3339(ts).ok())
                         .map(|dt| {
-                            chrono::Utc::now()
-                                .signed_duration_since(dt.with_timezone(&chrono::Utc))
+                            chrono::Utc::now().signed_duration_since(dt.with_timezone(&chrono::Utc))
                                 < chrono::Duration::minutes(30)
                         })
                         .unwrap_or(false);
@@ -371,8 +370,10 @@ impl SessionRepo {
                )",
             placeholders
         );
-        let del_params: Vec<&dyn rusqlite::types::ToSql> =
-            tool_ids.iter().map(|t| &*t as &dyn rusqlite::types::ToSql).collect();
+        let del_params: Vec<&dyn rusqlite::types::ToSql> = tool_ids
+            .iter()
+            .map(|t| t as &dyn rusqlite::types::ToSql)
+            .collect();
         let _ = conn
             .lock()
             .map_err(|e| e.to_string())?
@@ -607,7 +608,9 @@ mod tests {
         s2.message_count = 5;
         repo.upsert_session(&db, &s2).expect("upsert again");
 
-        let rows = repo.list_sessions(&db, None, None, None, None).expect("list");
+        let rows = repo
+            .list_sessions(&db, None, None, None, None)
+            .expect("list");
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].message_count, 5);
         // model_set 合并：旧模型保留 + 新模型加入
@@ -633,7 +636,9 @@ mod tests {
             "maas_cl_opus_4.8_20260528_cache".into(),
         ];
         repo.upsert_session(&db, &s).expect("upsert");
-        let rows = repo.list_sessions(&db, None, None, None, None).expect("list");
+        let rows = repo
+            .list_sessions(&db, None, None, None, None)
+            .expect("list");
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].model_set, vec!["claude-opus-4-8".to_string()]);
     }
@@ -730,7 +735,10 @@ mod tests {
         // 空 session_id 行与 imported 行不投影 → 只有 2 个会话
         assert_eq!(rows.len(), 2);
 
-        let claude = rows.iter().find(|s| s.tool_id == "claude_code").expect("claude");
+        let claude = rows
+            .iter()
+            .find(|s| s.tool_id == "claude_code")
+            .expect("claude");
         // session_id 命名空间化 + external 保留原始 id（供下钻 external 兜底匹配）
         assert_eq!(claude.session_id, "claude_code:sess-claude");
         assert_eq!(claude.external_session_id.as_deref(), Some("sess-claude"));
@@ -740,12 +748,19 @@ mod tests {
         assert_eq!(claude.output_tokens, 300);
         assert_eq!(claude.cache_tokens, 60); // cache_read + cache_write 合并
         assert_eq!(claude.total_tokens, 760); // in + out + cache（保持内部恒等）
-        // message_count = SUM(message_count)：5 + 3 = 8（非行数 2）
+                                              // message_count = SUM(message_count)：5 + 3 = 8（非行数 2）
         assert_eq!(claude.message_count, 8);
         assert_eq!(claude.started_at.as_deref(), Some("2026-08-08T00:00:00Z"));
-        assert_eq!(claude.last_active_at.as_deref(), Some("2026-08-08T01:00:00Z"));
+        assert_eq!(
+            claude.last_active_at.as_deref(),
+            Some("2026-08-08T01:00:00Z")
+        );
         assert!((claude.cost_amount.unwrap() - 0.03).abs() < 1e-9);
-        assert!(claude.title_redacted.as_deref().unwrap_or("").contains("sess-claude"));
+        assert!(claude
+            .title_redacted
+            .as_deref()
+            .unwrap_or("")
+            .contains("sess-claude"));
 
         // workbuddy 行 message_count 为 NULL → 回退 COUNT(*) = 1
         let wb = rows.iter().find(|s| s.tool_id == "workbuddy").expect("wb");
@@ -758,7 +773,9 @@ mod tests {
         assert_eq!(wb.last_active_at.as_deref(), Some("2026-08-08T01:45:00Z"));
 
         // 已落库：列表可读且可下钻（external 兜底匹配到 usage_event）
-        let listed = repo.list_sessions(&db, None, None, None, None).expect("list");
+        let listed = repo
+            .list_sessions(&db, None, None, None, None)
+            .expect("list");
         assert_eq!(listed.len(), 2);
         let detail = crate::db::token_usage::UsageEventRepo
             .session_event_rows(&db, &claude.session_id)
@@ -814,27 +831,42 @@ mod tests {
             )
             .expect("seed members");
         }
-        let day = repo.list_sessions(&db, None, None, None, Some("day")).expect("day");
+        let day = repo
+            .list_sessions(&db, None, None, None, Some("day"))
+            .expect("day");
         let day_ids: Vec<&str> = day.iter().map(|s| s.session_id.as_str()).collect();
-        assert_eq!(day_ids.len(), 3, "covered 成员 2 个 + companion freebuff 1 个");
+        assert_eq!(
+            day_ids.len(),
+            3,
+            "covered 成员 2 个 + companion freebuff 1 个"
+        );
         assert!(day_ids.contains(&"claude_code:sess-a"));
         assert!(day_ids.contains(&"workbuddy:sess-c"));
         assert!(day_ids.contains(&"freebuff:sess-d"));
         assert!(!day_ids.contains(&"claude_code:sess-b"));
 
         // 7d：covered 三个成员 + companion freebuff 都在
-        let week = repo.list_sessions(&db, None, None, None, Some("7d")).expect("7d");
+        let week = repo
+            .list_sessions(&db, None, None, None, Some("7d"))
+            .expect("7d");
         assert_eq!(week.len(), 4);
 
         // total：不过滤（4 个）
-        let total = repo.list_sessions(&db, None, None, None, Some("total")).expect("total");
+        let total = repo
+            .list_sessions(&db, None, None, None, Some("total"))
+            .expect("total");
         assert_eq!(total.len(), 4);
 
         // 按 TOKENS 总量降序：sess-d(400) > sess-c(300) > sess-b(200) > sess-a(100)
         let total_ids: Vec<&str> = total.iter().map(|s| s.session_id.as_str()).collect();
         assert_eq!(
             total_ids,
-            vec!["freebuff:sess-d", "workbuddy:sess-c", "claude_code:sess-b", "claude_code:sess-a"]
+            vec![
+                "freebuff:sess-d",
+                "workbuddy:sess-c",
+                "claude_code:sess-b",
+                "claude_code:sess-a"
+            ]
         );
     }
 
@@ -874,7 +906,9 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].session_id, "claude_code:sess-a");
 
-        let listed = repo.list_sessions(&db, None, None, None, None).expect("list");
+        let listed = repo
+            .list_sessions(&db, None, None, None, None)
+            .expect("list");
         let ids: Vec<&str> = listed.iter().map(|s| s.session_id.as_str()).collect();
         // 投影行 + imported 支撑行保留；幽灵 hash 行被清理；companion 行不受影响
         assert!(ids.contains(&"claude_code:sess-a"));

@@ -241,7 +241,7 @@ mod tests {
 
     #[test]
     fn zcode_parses_model_complete_usage_with_cross_line_model() {
-        let adapter = ZcodeAdapter::default();
+        let adapter = ZcodeAdapter;
         let src = fixture();
         let r1 = adapter
             .collect_incremental(&src, CollectorCheckpoint::default())
@@ -262,7 +262,7 @@ mod tests {
 
     #[test]
     fn zcode_missing_file_returns_error() {
-        let adapter = ZcodeAdapter::default();
+        let adapter = ZcodeAdapter;
         let src = DataSource {
             id: "x".into(),
             path: PathBuf::from("/nonexistent/zcode.jsonl"),

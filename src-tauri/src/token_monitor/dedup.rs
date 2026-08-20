@@ -44,7 +44,13 @@ pub fn fingerprint(event: &NormalizedUsageEvent) -> String {
     // 同一工具的多个本地数据源可能复用 thread/seq（例如多个 Freebuff workspace）。
     // 有 locator 时纳入指纹，避免跨源事件被错误合并；旧事件 locator=None 的行为不变。
     hasher.update(b"|");
-    hasher.update(event.source_locator_hash.as_deref().unwrap_or("").as_bytes());
+    hasher.update(
+        event
+            .source_locator_hash
+            .as_deref()
+            .unwrap_or("")
+            .as_bytes(),
+    );
     hex::encode(hasher.finalize())
 }
 

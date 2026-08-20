@@ -364,10 +364,7 @@ pub async fn test_account_connection(
     let provider = state
         .db
         .providers
-        .get_by_id(
-            &state.db.conn,
-            &account.provider_id.as_deref().unwrap_or(""),
-        )?
+        .get_by_id(&state.db.conn, account.provider_id.as_deref().unwrap_or(""))?
         .ok_or_else(|| "未找到关联的上游连接器".to_string())?;
 
     // Get credential from account

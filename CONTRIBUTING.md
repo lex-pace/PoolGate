@@ -33,6 +33,8 @@ pnpm run check:rust
 pnpm run test:rust
 pnpm run fmt:check
 pnpm run lint:rust
+# Optional stricter gate while warning cleanup is in progress:
+pnpm run lint:rust:strict
 ```
 
 If a check cannot run on your platform, explain that in the pull request. Do not include real credentials, user databases, logs, OAuth tokens, or private agent transcripts in commits or fixtures.

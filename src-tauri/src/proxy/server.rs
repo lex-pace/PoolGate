@@ -117,10 +117,7 @@ async fn mark_account_suspended(
         status_code
     );
     let redacted = crate::services::redaction::redact_sensitive(&signal);
-    let display_name = account
-        .name
-        .clone()
-        .unwrap_or_else(|| account.id.clone());
+    let display_name = account.name.clone().unwrap_or_else(|| account.id.clone());
     let _ = state.app_state.db.accounts.update_health(
         &state.app_state.db.conn,
         &account.id,
@@ -447,9 +444,9 @@ pub async fn start_proxy_server(
     // (any origin) are safe to allow — auth is enforced per request.
     let cors = CorsLayer::new()
         .allow_origin(match listen_mode {
-            ListenMode::Localhost => AllowOrigin::predicate(|origin, _parts| {
-                is_allowed_local_origin(origin)
-            }),
+            ListenMode::Localhost => {
+                AllowOrigin::predicate(|origin, _parts| is_allowed_local_origin(origin))
+            }
             ListenMode::Lan => AllowOrigin::any(),
         })
         .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
@@ -1349,8 +1346,7 @@ async fn anthropic_handler(
             )
             .await;
 
-        let is_claude_oauth =
-            crate::services::claude_adapter::is_claude_oauth(&account, &provider);
+        let is_claude_oauth = crate::services::claude_adapter::is_claude_oauth(&account, &provider);
         let result =
             anthropic::handle_anthropic_request(body.clone(), &account, &provider, Some(permit))
                 .await;
@@ -1366,31 +1362,29 @@ async fn anthropic_handler(
             )
             .await
             {
-                Ok(refreshed) => {
-                    match state.account_concurrency.acquire(&refreshed.id).await {
-                        Ok(refreshed_permit) => {
-                            tracing::info!(
-                                "Claude OAuth token refreshed for '{}'; retrying request",
-                                account.id
-                            );
-                            anthropic::handle_anthropic_request(
-                                body.clone(),
-                                &refreshed,
-                                &provider,
-                                Some(refreshed_permit),
-                            )
-                            .await
-                        }
-                        Err(error) => {
-                            tracing::warn!(
-                                "Account '{}' is at capacity after refresh: {}",
-                                refreshed.id,
-                                error
-                            );
-                            result
-                        }
+                Ok(refreshed) => match state.account_concurrency.acquire(&refreshed.id).await {
+                    Ok(refreshed_permit) => {
+                        tracing::info!(
+                            "Claude OAuth token refreshed for '{}'; retrying request",
+                            account.id
+                        );
+                        anthropic::handle_anthropic_request(
+                            body.clone(),
+                            &refreshed,
+                            &provider,
+                            Some(refreshed_permit),
+                        )
+                        .await
                     }
-                }
+                    Err(error) => {
+                        tracing::warn!(
+                            "Account '{}' is at capacity after refresh: {}",
+                            refreshed.id,
+                            error
+                        );
+                        result
+                    }
+                },
                 Err(error) => {
                     tracing::warn!(
                         "Claude OAuth 401 token refresh failed for '{}': {}",
@@ -2309,7 +2303,10 @@ mod tests {
     fn listen_mode_setting_maps_to_bind_host() {
         assert_eq!(ListenMode::from_setting("lan"), ListenMode::Lan);
         assert_eq!(ListenMode::from_setting("localhost"), ListenMode::Localhost);
-        assert_eq!(ListenMode::from_setting("anything-else"), ListenMode::Localhost);
+        assert_eq!(
+            ListenMode::from_setting("anything-else"),
+            ListenMode::Localhost
+        );
         assert_eq!(ListenMode::from_setting(""), ListenMode::Localhost);
         assert_eq!(ListenMode::Localhost.bind_host(), "127.0.0.1");
         assert_eq!(ListenMode::Lan.bind_host(), "0.0.0.0");
@@ -2552,7 +2549,10 @@ mod tests {
             (StatusCode::UNAUTHORIZED, Some("invalid x-api-key")),
             (StatusCode::TOO_MANY_REQUESTS, Some("rate limit exceeded")),
             (StatusCode::FORBIDDEN, None),
-            (StatusCode::BAD_REQUEST, Some("Your account has been suspended")),
+            (
+                StatusCode::BAD_REQUEST,
+                Some("Your account has been suspended"),
+            ),
         ] {
             assert!(
                 super::detect_ban_signal(status, message).is_none(),
@@ -2575,7 +2575,10 @@ mod tests {
             br#"{"model":"claude-sonnet-4","messages":[{"role":"user","content":"fix the login bug"},{"role":"assistant","content":"done"},{"role":"user","content":"now add tests"}]}"#,
         );
         assert!(turn_one.is_some());
-        assert_eq!(turn_one, turn_two, "first user message is conversation-stable");
+        assert_eq!(
+            turn_one, turn_two,
+            "first user message is conversation-stable"
+        );
 
         // A different conversation gets a different key.
         let other = super::session_affinity_key(

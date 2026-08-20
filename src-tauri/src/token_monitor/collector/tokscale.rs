@@ -113,7 +113,10 @@ pub(crate) fn build_trend_series(json: &serde_json::Value) -> TrendSeries {
             let Some(date) = c.get("date").and_then(|v| v.as_str()).map(str::to_string) else {
                 continue;
             };
-            let totals = c.get("totals").cloned().unwrap_or_else(|| serde_json::json!({}));
+            let totals = c
+                .get("totals")
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!({}));
             let totals_tokens = totals.get("tokens").and_then(|v| v.as_f64()).unwrap_or(0.0);
             let cost = totals.get("cost").and_then(|v| v.as_f64());
             let day_messages = totals.get("messages").and_then(|v| v.as_i64()).unwrap_or(0);
@@ -274,10 +277,33 @@ pub(crate) fn warm_trend_cache() {
 /// （避免双算）；清单外的工具（如 atomcode）作为 companion 并行采集。
 /// `covers_tool` 与 `covered_tool_ids` 共用此清单（单一事实源）。
 pub(crate) const COVERED_TOOL_IDS: &[&str] = &[
-    "antigravity", "claude_code", "cline", "codebuddy", "codex", "cursor", "gemini",
-    "github_copilot", "grok_build", "hermes", "kilo_code", "kimi", "kiro", "mimo",
-    "minimax", "openclaw", "opencode", "openrouter", "pi", "proma", "qwen", "trae",
-    "trae_solo", "volcengine_ark", "workbuddy", "zcode", "zed",
+    "antigravity",
+    "claude_code",
+    "cline",
+    "codebuddy",
+    "codex",
+    "cursor",
+    "gemini",
+    "github_copilot",
+    "grok_build",
+    "hermes",
+    "kilo_code",
+    "kimi",
+    "kiro",
+    "mimo",
+    "minimax",
+    "openclaw",
+    "opencode",
+    "openrouter",
+    "pi",
+    "proma",
+    "qwen",
+    "trae",
+    "trae_solo",
+    "volcengine_ark",
+    "workbuddy",
+    "zcode",
+    "zed",
 ];
 
 pub(crate) fn covers_tool(tool_id: &str) -> bool {
@@ -419,7 +445,10 @@ impl TokscaleAdapter {
         let mut events = Vec::with_capacity(entries.len());
         for entry in &entries {
             let client = entry.get("client").and_then(|v| v.as_str()).unwrap_or("");
-            let session_id = entry.get("sessionId").and_then(|v| v.as_str()).unwrap_or("");
+            let session_id = entry
+                .get("sessionId")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
             let model = entry.get("model").and_then(|v| v.as_str()).unwrap_or("");
             if client.is_empty() || session_id.is_empty() {
                 if let Some(event) = entry_to_event(entry, scanned_at, &(None, None), None) {
@@ -434,7 +463,11 @@ impl TokscaleAdapter {
                 .clone();
 
             // 获取上一步的 cache 值
-            let cache_key = (client.to_string(), session_id.to_string(), model.to_string());
+            let cache_key = (
+                client.to_string(),
+                session_id.to_string(),
+                model.to_string(),
+            );
             let prev = prev_cache.get(&cache_key).cloned();
 
             if let Some(event) = entry_to_event(entry, scanned_at, &times, prev) {
@@ -484,7 +517,10 @@ fn entry_to_event(
     let reasoning = entry.get("reasoning").and_then(|v| v.as_i64()).unwrap_or(0);
     let cost = entry.get("cost").and_then(|v| v.as_f64()).unwrap_or(0.0);
     // 该 (client, session, model) 组的消息数（tokscale 条目自带；会话投影据此求和）
-    let message_count = entry.get("messageCount").and_then(|v| v.as_i64()).unwrap_or(0);
+    let message_count = entry
+        .get("messageCount")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
     // 全 0 的合成条目(synthetic/无用量)不落库
     if input == 0 && output == 0 && cache_read == 0 && cache_write == 0 {
         return None;
@@ -522,8 +558,16 @@ fn entry_to_event(
         account_id: None,
         input_tokens: Some(input),
         output_tokens: Some(output),
-        cache_read_tokens: if cache_read_delta > 0 { Some(cache_read_delta) } else { None },
-        cache_write_tokens: if cache_write_delta > 0 { Some(cache_write_delta) } else { None },
+        cache_read_tokens: if cache_read_delta > 0 {
+            Some(cache_read_delta)
+        } else {
+            None
+        },
+        cache_write_tokens: if cache_write_delta > 0 {
+            Some(cache_write_delta)
+        } else {
+            None
+        },
         reasoning_tokens: Some(reasoning),
         // 缺失/0 记 None（未知），会话投影 SUM 缺失回退 COUNT(*)
         message_count: (message_count > 0).then_some(message_count),
@@ -634,7 +678,10 @@ fn store_period_sessions(
     let Ok(conn) = conn.lock() else {
         return;
     };
-    let _ = conn.execute("DELETE FROM tm_period_session WHERE period=?1", rusqlite::params![period]);
+    let _ = conn.execute(
+        "DELETE FROM tm_period_session WHERE period=?1",
+        rusqlite::params![period],
+    );
     for ((tool_id, session_id), message_count) in by_session {
         let _ = conn.execute(
             "INSERT INTO tm_period_session (period, session_id, tool_id, message_count) \
@@ -676,13 +723,7 @@ fn session_roots(client: &str, session_id: &str) -> Vec<PathBuf> {
                 .and_then(|s| s.get(..10))
             {
                 if let (Some(y), Some(m), Some(d)) = (ts.get(..4), ts.get(5..7), ts.get(8..10)) {
-                    roots.push(
-                        home.join(".codex")
-                            .join("sessions")
-                            .join(y)
-                            .join(m)
-                            .join(d),
-                    );
+                    roots.push(home.join(".codex").join("sessions").join(y).join(m).join(d));
                 }
             }
         }
@@ -817,8 +858,17 @@ fn last_jsonl_ts(buf: &[u8]) -> Option<String> {
 /// 从 JSON 对象取时间戳字段（对齐开源 firstString/STARTED_AT_KEYS/LAST_USED_AT_KEYS）。
 fn json_ts(obj: &serde_json::Value) -> Option<String> {
     for key in [
-        "timestamp", "ts", "updatedAt", "updated_at", "createdAt", "created_at",
-        "lastUsedAt", "last_used_at", "startedAt", "started_at", "time",
+        "timestamp",
+        "ts",
+        "updatedAt",
+        "updated_at",
+        "createdAt",
+        "created_at",
+        "lastUsedAt",
+        "last_used_at",
+        "startedAt",
+        "started_at",
+        "time",
     ] {
         if let Some(v) = obj.get(key).and_then(|v| v.as_str()) {
             if let Some(iso) = normalize_iso(v.trim()) {
@@ -837,7 +887,12 @@ fn normalize_iso(s: &str) -> Option<String> {
     if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(s) {
         return Some(dt.to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
     }
-    for fmt in ["%Y-%m-%dT%H:%M:%S%.f", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S%.f", "%Y-%m-%d %H:%M:%S"] {
+    for fmt in [
+        "%Y-%m-%dT%H:%M:%S%.f",
+        "%Y-%m-%dT%H:%M:%S",
+        "%Y-%m-%d %H:%M:%S%.f",
+        "%Y-%m-%d %H:%M:%S",
+    ] {
         if let Ok(naive) = chrono::NaiveDateTime::parse_from_str(s, fmt) {
             return Some(
                 chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(naive, chrono::Utc)
@@ -919,7 +974,12 @@ fn find_transcript_in_dir(dir: &Path, depth: u32) -> Option<PathBuf> {
     let entries = std::fs::read_dir(dir).ok()?;
     for entry in entries.flatten() {
         let path = entry.path();
-        if path.is_file() && path.file_name().map(|n| n == "transcript.jsonl").unwrap_or(false) {
+        if path.is_file()
+            && path
+                .file_name()
+                .map(|n| n == "transcript.jsonl")
+                .unwrap_or(false)
+        {
             return Some(path);
         }
     }
@@ -939,7 +999,9 @@ fn find_transcript_in_dir(dir: &Path, depth: u32) -> Option<PathBuf> {
 fn file_mtime(path: &Path) -> Option<i64> {
     let meta = path.metadata().ok()?;
     let t = meta.modified().ok()?;
-    t.duration_since(UNIX_EPOCH).ok().map(|d| d.as_millis() as i64)
+    t.duration_since(UNIX_EPOCH)
+        .ok()
+        .map(|d| d.as_millis() as i64)
 }
 
 /// epoch 毫秒 → UTC ISO8601。
@@ -1120,8 +1182,14 @@ mod tests {
         assert_eq!(event.tool_id, "claude_code");
         assert_eq!(event.session_id.as_deref(), Some("sess-1"));
         // 会话级真实时间戳透传；occurred_at = 最后活跃（非扫描时刻）
-        assert_eq!(event.session_started_at.as_deref(), Some("2026-08-08T00:00:00Z"));
-        assert_eq!(event.session_last_active_at.as_deref(), Some("2026-08-08T01:02:03Z"));
+        assert_eq!(
+            event.session_started_at.as_deref(),
+            Some("2026-08-08T00:00:00Z")
+        );
+        assert_eq!(
+            event.session_last_active_at.as_deref(),
+            Some("2026-08-08T01:02:03Z")
+        );
         assert_eq!(event.occurred_at, "2026-08-08T01:02:03Z");
         // 权威成本直通
         assert!((event.cost_amount.unwrap() - 1.25).abs() < 1e-9);
@@ -1139,7 +1207,8 @@ mod tests {
             "reasoning": 0, "messageCount": 1, "cost": 0.01,
             "performance": null
         });
-        let event = entry_to_event(&json, "2026-08-08T12:00:00Z", &(None, None), None).expect("event");
+        let event =
+            entry_to_event(&json, "2026-08-08T12:00:00Z", &(None, None), None).expect("event");
         assert_eq!(event.session_started_at, None);
         assert_eq!(event.session_last_active_at, None);
         assert_eq!(event.occurred_at, "2026-08-08T12:00:00Z");
@@ -1200,19 +1269,26 @@ mod tests {
         assert_eq!(s.active_time_ms, 10_800_000); // timeMetrics 优先
         assert_eq!(s.daily.len(), 3);
         assert_eq!(s.daily[0].date, "2026-08-06"); // 升序
-        assert_eq!(s.peak_day.as_ref().map(|d| d.date.as_str()), Some("2026-08-07"));
+        assert_eq!(
+            s.peak_day.as_ref().map(|d| d.date.as_str()),
+            Some("2026-08-07")
+        );
         assert_eq!(s.monthly[0].month, "2026-08");
         assert_eq!(s.monthly[0].tokens, 16_000);
         // 按工具拆分：claude→claude_code；8-06 两工具
         let day0 = &s.daily[0];
         let clients = day0.per_client.as_ref().expect("per_client");
-        assert!(clients.iter().any(|x| x.key == "claude_code" && x.tokens == 5000));
+        assert!(clients
+            .iter()
+            .any(|x| x.key == "claude_code" && x.tokens == 5000));
         assert!(clients.iter().any(|x| x.key == "codex" && x.tokens == 0));
         // 按模型拆分
         let models = day0.per_model.as_ref().expect("per_model");
         assert!(models.iter().any(|x| x.key == "claude-opus-4-8"));
         // 活跃时间缺失时回退各日之和
-        let s2 = build_trend_series(&serde_json::json!({"contributions": json["contributions"].clone()}));
+        let s2 = build_trend_series(
+            &serde_json::json!({"contributions": json["contributions"].clone()}),
+        );
         assert_eq!(s2.active_time_ms, 3_600_000 + 5_400_000 + 1_800_000);
     }
 

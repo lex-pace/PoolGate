@@ -25,10 +25,7 @@ use crate::token_monitor::dedup;
 use crate::token_monitor::model::{NormalizedUsageEvent, SourceType, UsageAccuracy};
 
 /// 该工具是否还有 `model_normalized` 为 NULL 的行（快速短路用，不解析数据源）。
-pub(crate) fn has_null_model_rows(
-    conn: &Mutex<rusqlite::Connection>,
-    tool_id: &str,
-) -> bool {
+pub(crate) fn has_null_model_rows(conn: &Mutex<rusqlite::Connection>, tool_id: &str) -> bool {
     let Ok(conn) = conn.lock() else {
         return false;
     };

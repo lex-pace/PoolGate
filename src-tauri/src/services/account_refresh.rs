@@ -271,30 +271,24 @@ async fn refresh_deepseek_quota(
     account: &Account,
 ) -> Result<(Option<String>, Vec<QuotaWindow>), String> {
     let api_key = authorization_secret(account)?;
-    let connector = crate::token_monitor::quota::deepseek::DeepSeekConnector::default();
+    let connector = crate::token_monitor::quota::deepseek::DeepSeekConnector;
     let windows = connector
         .fetch_quota_inner(&api_key)
         .await
         .map_err(|error| error.to_string())?;
     if windows.is_empty() {
         let error = "DeepSeek 余额接口未返回数据".to_string();
-        state.db.accounts.update_usage_error(
-            &state.db.conn,
-            account_id,
-            "deepseek",
-            &error,
-        )?;
+        state
+            .db
+            .accounts
+            .update_usage_error(&state.db.conn, account_id, "deepseek", &error)?;
         return Err(error);
     }
     let encoded = serde_json::to_string(&windows).map_err(|e| e.to_string())?;
-    state.db.accounts.update_usage(
-        &state.db.conn,
-        account_id,
-        "deepseek",
-        None,
-        &encoded,
-        None,
-    )?;
+    state
+        .db
+        .accounts
+        .update_usage(&state.db.conn, account_id, "deepseek", None, &encoded, None)?;
     // 无百分比窗口（余额是金额）；前端 RefreshResult 的 quota_windows 留空即可。
     Ok((None, vec![]))
 }

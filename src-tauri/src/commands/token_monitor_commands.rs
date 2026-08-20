@@ -289,7 +289,10 @@ pub async fn rescan_tool(state: State<'_, Arc<AppState>>, tool_id: String) -> Re
 /// 重置某工具的全部数据：删除旧事件 + 重建 rollup + 重新采集。
 /// 用于适配器逻辑变更后清理旧数据（如 DSH cacheReadTokens 口径变更）。
 #[tauri::command]
-pub async fn reset_tool_data(state: State<'_, Arc<AppState>>, tool_id: String) -> Result<(), String> {
+pub async fn reset_tool_data(
+    state: State<'_, Arc<AppState>>,
+    tool_id: String,
+) -> Result<(), String> {
     crate::token_monitor::service_collect::reset_tool_data(&state, &tool_id)
 }
 
@@ -350,9 +353,7 @@ pub async fn remove_custom_app(
 ///   burn （tokens/min）= timedTokens * 60000 / timedDurationMs
 /// 快照缺失或当日无带时长的条目时，回退近 60s/1h 的 usage_event 墙钟窗口。
 #[tauri::command]
-pub async fn get_token_rate(
-    state: State<'_, Arc<AppState>>,
-) -> Result<TokenRateView, String> {
+pub async fn get_token_rate(state: State<'_, Arc<AppState>>) -> Result<TokenRateView, String> {
     let (duration_ms, timed_tokens, timed_output) = state
         .db
         .usage_events
@@ -422,9 +423,7 @@ pub fn get_account_token_stats(
         let conn = state.db.conn.lock().map_err(|e| e.to_string())?;
         // 网关账号：accounts.id → gw:{id}
         let mut stmt = conn
-            .prepare(
-                "SELECT id FROM accounts WHERE status IS NULL OR status != 'disabled'",
-            )
+            .prepare("SELECT id FROM accounts WHERE status IS NULL OR status != 'disabled'")
             .map_err(|e| e.to_string())?;
         let ids: Vec<String> = stmt
             .query_map([], |row| row.get(0))
@@ -671,13 +670,10 @@ fn oauth_window_to_view(
         .and_then(|v| v.as_f64())
         .unwrap_or_else(|| (100.0 - used).max(0.0))
         .clamp(0.0, 100.0);
-    let resets_at = w
-        .get("reset_at")
-        .and_then(|v| v.as_i64())
-        .and_then(|secs| {
-            chrono::DateTime::from_timestamp(secs, 0)
-                .map(|dt| dt.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
-        });
+    let resets_at = w.get("reset_at").and_then(|v| v.as_i64()).and_then(|secs| {
+        chrono::DateTime::from_timestamp(secs, 0)
+            .map(|dt| dt.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
+    });
     let window_type = match key.as_str() {
         "primary" => crate::token_monitor::quota::QuotaWindowType::Rolling5h,
         "secondary" => crate::token_monitor::quota::QuotaWindowType::Weekly,

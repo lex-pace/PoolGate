@@ -210,7 +210,9 @@ pub fn run() {
                 // vibrancy 负责磨砂桌面/壁纸。托盘窗口在 tray.rs 中使用同一材质。
                 #[cfg(target_os = "macos")]
                 {
-                    use window_vibrancy::{apply_vibrancy, NSVisualEffectMaterial, NSVisualEffectState};
+                    use window_vibrancy::{
+                        apply_vibrancy, NSVisualEffectMaterial, NSVisualEffectState,
+                    };
                     let _ = apply_vibrancy(
                         &main_window,
                         NSVisualEffectMaterial::HudWindow,
@@ -268,19 +270,17 @@ pub fn run() {
                         // 事件载荷是 Tauri 从 NSAppleInterfaceThemeChanged
                         // 实时发布的，比 `window.theme()` 更稳。
                         let appearance = match theme {
-                            tauri::Theme::Dark => {
-                                crate::services::menu_bar::Appearance::Dark
-                            }
+                            tauri::Theme::Dark => crate::services::menu_bar::Appearance::Dark,
                             _ => crate::services::menu_bar::Appearance::Light,
                         };
-                        if let Err(error) = crate::services::menu_bar::apply_menu_bar_with_appearance(
-                            &menu_bar_app,
-                            &app_state_clone,
-                            appearance,
-                        ) {
-                            tracing::warn!(
-                                "menu bar refresh on theme change failed: {error}"
-                            );
+                        if let Err(error) =
+                            crate::services::menu_bar::apply_menu_bar_with_appearance(
+                                &menu_bar_app,
+                                &app_state_clone,
+                                appearance,
+                            )
+                        {
+                            tracing::warn!("menu bar refresh on theme change failed: {error}");
                         }
                     }
                     _ => {}

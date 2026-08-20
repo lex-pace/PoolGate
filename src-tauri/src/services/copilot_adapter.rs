@@ -148,7 +148,10 @@ pub async fn exchange_github_token_for_copilot(github_token: &str) -> Result<Str
         .post(COPILOT_TOKEN_URL)
         .header("Authorization", format!("token {}", github_token))
         .header("Accept", "application/json")
-        .header("User-Agent", crate::services::client_profiles::COPILOT_CHAT_USER_AGENT)
+        .header(
+            "User-Agent",
+            crate::services::client_profiles::COPILOT_CHAT_USER_AGENT,
+        )
         .send()
         .await
         .map_err(|error| format!("Copilot token request failed: {}", error))?;

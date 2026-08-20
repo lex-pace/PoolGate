@@ -103,7 +103,10 @@ pub fn set_menu_bar_main_text<R: tauri::Runtime>(
     main_text: String,
 ) -> Result<(), String> {
     if !matches!(main_text.as_str(), "tokens" | "top1_tool" | "top1_model") {
-        return Err("Invalid menu bar main text. Must be 'tokens', 'top1_tool' or 'top1_model'.".to_string());
+        return Err(
+            "Invalid menu bar main text. Must be 'tokens', 'top1_tool' or 'top1_model'."
+                .to_string(),
+        );
     }
     state
         .db
@@ -142,7 +145,12 @@ pub fn get_app_mode_value(state: &Arc<AppState>) -> Result<String, String> {
     }
     let has_existing_gateway_data = !state.db.accounts.list_all(&state.db.conn)?.is_empty()
         && !state.db.groups.list_all(&state.db.conn)?.is_empty();
-    Ok(if has_existing_gateway_data { "gateway" } else { "" }.to_string())
+    Ok(if has_existing_gateway_data {
+        "gateway"
+    } else {
+        ""
+    }
+    .to_string())
 }
 
 pub fn is_monitor_mode(state: &Arc<AppState>) -> Result<bool, String> {
@@ -224,10 +232,7 @@ pub fn get_gateway_settings(state: State<'_, Arc<AppState>>) -> Result<GatewaySe
 /// network unauthenticated. If the gateway is running the change is applied
 /// immediately by restarting it on the new address.
 #[tauri::command]
-pub async fn set_listen_addr(
-    state: State<'_, Arc<AppState>>,
-    mode: String,
-) -> Result<(), String> {
+pub async fn set_listen_addr(state: State<'_, Arc<AppState>>, mode: String) -> Result<(), String> {
     if is_monitor_mode(state.inner())? {
         return Err("Monitor 模式已禁用 Gateway 设置".to_string());
     }
@@ -250,10 +255,7 @@ pub async fn set_listen_addr(
             );
         }
     }
-    state
-        .db
-        .settings
-        .set(&state.db.conn, LISTEN_ADDR, &mode)?;
+    state.db.settings.set(&state.db.conn, LISTEN_ADDR, &mode)?;
     // 立即生效：若网关正在运行，自动重启以应用新的监听地址。
     let running = state
         .proxy
@@ -293,10 +295,7 @@ pub fn get_app_mode(state: State<'_, Arc<AppState>>) -> Result<AppModeState, Str
 }
 
 #[tauri::command]
-pub async fn set_app_mode(
-    state: State<'_, Arc<AppState>>,
-    mode: String,
-) -> Result<(), String> {
+pub async fn set_app_mode(state: State<'_, Arc<AppState>>, mode: String) -> Result<(), String> {
     if !matches!(mode.as_str(), "gateway" | "monitor") {
         return Err("Invalid app mode. Must be 'gateway' or 'monitor'.".to_string());
     }

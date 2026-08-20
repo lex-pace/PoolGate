@@ -58,9 +58,9 @@ pub async fn handle_anthropic_request(
     let claude_oauth = crate::services::claude_adapter::is_claude_oauth(account, provider);
     let request_body: Vec<u8> = if claude_oauth {
         match serde_json::from_slice::<serde_json::Value>(&body) {
-            Ok(value) => serde_json::to_vec(&crate::services::claude_adapter::prepare_messages_body(
-                &value, is_streaming,
-            ))
+            Ok(value) => serde_json::to_vec(
+                &crate::services::claude_adapter::prepare_messages_body(&value, is_streaming),
+            )
             .map_err(|_| StatusCode::BAD_REQUEST)?,
             // Non-JSON bodies cannot receive the prefix; forward as-is and let
             // the upstream reject it.

@@ -253,7 +253,7 @@ mod tests {
         ]);
         drop(conn);
 
-        let adapter = OpenCodeAdapter::default();
+        let adapter = OpenCodeAdapter;
         let src = DataSource {
             id: "opencode:main".into(),
             path,
@@ -286,7 +286,7 @@ mod tests {
 
     #[test]
     fn opencode_missing_db_returns_path_missing() {
-        let adapter = OpenCodeAdapter::default();
+        let adapter = OpenCodeAdapter;
         let src = DataSource {
             id: "opencode:main".into(),
             path: PathBuf::from("/nonexistent/opencode.db"),
@@ -300,7 +300,7 @@ mod tests {
 
     #[test]
     fn opencode_readonly_does_not_create_file() {
-        let adapter = OpenCodeAdapter::default();
+        let adapter = OpenCodeAdapter;
         let src = DataSource {
             id: "x".into(),
             path: PathBuf::from("/nonexistent/opencode-x.db"),

@@ -211,7 +211,9 @@ impl AccountSelector {
                     return Some(idx);
                 }
             }
-            let picked = self.pick_with_codex_serial(routing_key, accounts, &candidates).await?;
+            let picked = self
+                .pick_with_codex_serial(routing_key, accounts, &candidates)
+                .await?;
             session_affinity::set(&affinity_key, &accounts[picked].id);
             return Some(picked);
         }
@@ -1235,13 +1237,12 @@ mod tests {
 
         let accounts = vec![a1.clone(), a2.clone()];
         // 首次：剩余额度最多的 acct-codex-1（used 10%）。
-        let i =
-            futures::executor::block_on(selector.select_index(key, None, &accounts)).unwrap();
+        let i = futures::executor::block_on(selector.select_index(key, None, &accounts)).unwrap();
         assert_eq!(accounts[i].id, "acct-codex-1");
         // 连续请求保持 sticky，绝不轮询。
         for _ in 0..5 {
-            let j = futures::executor::block_on(selector.select_index(key, None, &accounts))
-                .unwrap();
+            let j =
+                futures::executor::block_on(selector.select_index(key, None, &accounts)).unwrap();
             assert_eq!(accounts[j].id, "acct-codex-1");
         }
         // acct-codex-1 额度耗尽离开候选（quota_exhausted 已过滤）→ 切到
@@ -1306,10 +1307,8 @@ mod tests {
         a2.id = "acct-chat-2".into();
         let key = "noncodex-test|chat|gpt-4.1";
         let accounts = vec![a1, a2];
-        let i =
-            futures::executor::block_on(selector.select_index(key, None, &accounts)).unwrap();
-        let j =
-            futures::executor::block_on(selector.select_index(key, None, &accounts)).unwrap();
+        let i = futures::executor::block_on(selector.select_index(key, None, &accounts)).unwrap();
+        let j = futures::executor::block_on(selector.select_index(key, None, &accounts)).unwrap();
         // 非 Codex 场景仍按池配置轮询。
         assert_ne!(accounts[i].id, accounts[j].id);
     }

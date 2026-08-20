@@ -57,7 +57,7 @@ mod tests {
 
     #[test]
     fn cursor_json_array_collect_and_mtime_skip() {
-        let adapter = CursorAdapter::default();
+        let adapter = CursorAdapter;
         let src = DataSource {
             id: "cursor:test".into(),
             path: PathBuf::from("tests/fixtures/cursor/sessions.json"),

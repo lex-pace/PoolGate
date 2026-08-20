@@ -86,10 +86,11 @@ pub fn usage_from_sse_event(event_block: &str) -> Usage {
         };
     }
 
-    if let Some(usage) = value
-        .get("usageMetadata")
-        .or_else(|| value.get("response").and_then(|node| node.get("usageMetadata")))
-    {
+    if let Some(usage) = value.get("usageMetadata").or_else(|| {
+        value
+            .get("response")
+            .and_then(|node| node.get("usageMetadata"))
+    }) {
         return Usage::from_gemini_metadata(usage);
     }
 
@@ -159,8 +160,7 @@ pub fn forward_sse_stream_with_context(
                         // (Anthropic `event: error`, OpenAI/Gemini error data).
                         // Forward it to the client, then record the failure with
                         // the downstream-provided message.
-                        if let Some(message) =
-                            crate::proxy::protocol::sse_event_error(&event_block)
+                        if let Some(message) = crate::proxy::protocol::sse_event_error(&event_block)
                         {
                             let _ = tx.send(Bytes::from(event_block + "\n\n")).await;
                             completion_error = Some(message);
@@ -271,7 +271,11 @@ mod tests {
         );
         assert!(chat.available);
         assert_eq!(
-            (chat.input_tokens, chat.output_tokens, chat.cache_read_tokens),
+            (
+                chat.input_tokens,
+                chat.output_tokens,
+                chat.cache_read_tokens
+            ),
             // OpenAI prompt_tokens is cache-inclusive → 12 - 3 fresh.
             (9, 7, 3)
         );

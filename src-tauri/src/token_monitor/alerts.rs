@@ -372,23 +372,23 @@ mod tests {
     #[test]
     fn collector_healthy_status_no_alert() {
         assert!(evaluate_collector_alert("Codex", "codex", &CollectorStatus::Idle, None).is_none());
-        assert!(evaluate_collector_alert("Codex", "codex", &CollectorStatus::Active, None).is_none());
+        assert!(
+            evaluate_collector_alert("Codex", "codex", &CollectorStatus::Active, None).is_none()
+        );
     }
 
     #[test]
     fn collector_alert_dedup_keyed_by_status() {
         // 不同错误状态视为不同告警（各自独立去抖）
-        let first = evaluate_collector_alert(
-            "Cursor",
-            "cursor",
-            &CollectorStatus::Permission,
-            None,
-        );
+        let first =
+            evaluate_collector_alert("Cursor", "cursor", &CollectorStatus::Permission, None);
         assert!(first.is_some());
         let second = evaluate_collector_alert("Cursor", "cursor", &CollectorStatus::Error, None);
         assert!(second.is_some());
         // 同 (tool, status) 立即重复 → 去抖
-        assert!(evaluate_collector_alert("Cursor", "cursor", &CollectorStatus::Error, None).is_none());
+        assert!(
+            evaluate_collector_alert("Cursor", "cursor", &CollectorStatus::Error, None).is_none()
+        );
     }
 
     #[test]

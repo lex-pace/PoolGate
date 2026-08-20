@@ -10,8 +10,8 @@ use std::sync::Mutex;
 
 use crate::token_monitor::dedup;
 use crate::token_monitor::model::{
-    CollectorStatus, ModelUsageRow, NormalizedUsageEvent, SeriesSplit, SessionEventRow, SupportLevel,
-    ToolUsageRow, TrendDay, TrendMonth, TrendSeries,
+    CollectorStatus, ModelUsageRow, NormalizedUsageEvent, SeriesSplit, SessionEventRow,
+    SupportLevel, ToolUsageRow, TrendDay, TrendMonth, TrendSeries,
 };
 use crate::token_monitor::normalization;
 use crate::token_monitor::pricing;
@@ -19,7 +19,18 @@ use crate::token_monitor::pricing;
 pub struct UsageEventRepo;
 
 /// 工具分组查询行（(tool, model) 维度，含展示元数据与成本），供工具行聚合复用。
-type ToolGroupRow = (String, String, String, String, String, i64, i64, i64, i64, Option<f64>);
+type ToolGroupRow = (
+    String,
+    String,
+    String,
+    String,
+    String,
+    i64,
+    i64,
+    i64,
+    i64,
+    Option<f64>,
+);
 /// 模型分组查询行（模型维度，含成本）。
 type ModelGroupRow = (String, i64, i64, i64, i64, Option<f64>);
 
@@ -41,9 +52,7 @@ WITH unified AS (
 )";
 
 /// 已关闭监控（enabled=0）的 tool_id 集合（统计剔除用）。
-pub(crate) fn disabled_tool_ids(
-    conn: &Mutex<Connection>,
-) -> std::collections::HashSet<String> {
+pub(crate) fn disabled_tool_ids(conn: &Mutex<Connection>) -> std::collections::HashSet<String> {
     let Ok(conn) = conn.lock() else {
         return std::collections::HashSet::new();
     };
@@ -54,7 +63,10 @@ pub(crate) fn disabled_tool_ids(
     let ids = stmt
         .query_map([], |row| row.get::<_, String>(0))
         .ok()
-        .and_then(|rows| rows.collect::<Result<std::collections::HashSet<_>, _>>().ok())
+        .and_then(|rows| {
+            rows.collect::<Result<std::collections::HashSet<_>, _>>()
+                .ok()
+        })
         .unwrap_or_default();
     drop(stmt);
     ids
@@ -300,7 +312,10 @@ pub(crate) fn range_start_sql(range: &str) -> &'static str {
 
 /// day|7d|month|total 的本地日历边界（usage_event 的 occurred_at 列）。
 fn range_boundary(range: &str) -> String {
-    format!("datetime(occurred_at,'localtime') >= {}", range_start_sql(range))
+    format!(
+        "datetime(occurred_at,'localtime') >= {}",
+        range_start_sql(range)
+    )
 }
 
 /// companion 工具的 tool_id 过滤条件（可指定表别名）：排除 tokscale 覆盖清单内工具
@@ -665,7 +680,10 @@ impl UsageEventRepo {
         range: &str,
     ) -> Result<Vec<ToolUsageRow>, String> {
         let mut rows = if range != "total" {
-            match (period_tool_rows(conn, range), self.companion_tool_rows(conn, range)) {
+            match (
+                period_tool_rows(conn, range),
+                self.companion_tool_rows(conn, range),
+            ) {
                 (Some(snapshot_rows), Ok(companion_rows)) => {
                     Self::merge_tool_rows(snapshot_rows.into_iter().chain(companion_rows).collect())
                 }
@@ -1102,13 +1120,11 @@ impl UsageEventRepo {
                 let cache: i64 = row.get(4)?;
                 let model: Option<String> = row.get(1)?;
                 let cost_amount: Option<f64> = row.get(7)?;
-                let cost = cost_amount
-                    .filter(|c| *c > 0.0)
-                    .or_else(|| {
-                        model
-                            .as_deref()
-                            .and_then(|m| pricing::estimate_cost(m, input, output, cache))
-                    });
+                let cost = cost_amount.filter(|c| *c > 0.0).or_else(|| {
+                    model
+                        .as_deref()
+                        .and_then(|m| pricing::estimate_cost(m, input, output, cache))
+                });
                 Ok(SessionEventRow {
                     occurred_at: row.get(0)?,
                     model,
@@ -1687,7 +1703,9 @@ mod tests {
             )
             .expect("insert day2");
 
-        let series = UsageEventRepo.trend_series_from_db(&db, "total").expect("trend");
+        let series = UsageEventRepo
+            .trend_series_from_db(&db, "total")
+            .expect("trend");
         let day1 = series
             .daily
             .iter()
@@ -1745,7 +1763,9 @@ mod tests {
                 .expect("corrupt rollup");
         }
 
-        let series = UsageEventRepo.trend_series_from_db(&db, "total").expect("trend");
+        let series = UsageEventRepo
+            .trend_series_from_db(&db, "total")
+            .expect("trend");
         let day1 = series
             .daily
             .iter()
@@ -1762,7 +1782,10 @@ mod tests {
         let models = day1.per_model.as_ref().expect("per_model");
         assert_eq!(models.iter().map(|s| s.tokens).sum::<i64>(), day1.tokens);
         // 缺模型（freebuff 空 model）归入「未知模型」桶，按模型拆分不丢用量
-        let unknown = models.iter().find(|s| s.key == "未知模型").expect("unknown bucket");
+        let unknown = models
+            .iter()
+            .find(|s| s.key == "未知模型")
+            .expect("unknown bucket");
         assert_eq!(unknown.tokens, 60);
     }
 
@@ -2016,7 +2039,9 @@ mod tests {
         let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
         let mut fb = local_event("freebuff", 1000, 100, &now);
         fb.model_normalized = Some("deepseek/deepseek-v4-flash".into());
-        UsageEventRepo.insert_batch(&db, &[fb]).expect("insert freebuff");
+        UsageEventRepo
+            .insert_batch(&db, &[fb])
+            .expect("insert freebuff");
 
         // tokscale 权威快照：今天只有 covered 工具 100 tokens
         let snapshot_json = r#"{"groupBy":"client,model","totalInput":40,"totalOutput":20,"totalCacheRead":30,"totalCacheWrite":10,"totalCost":0.5,"entries":[{"client":"claude","model":"claude-3-5-sonnet","input":40,"output":20,"cacheRead":30,"cacheWrite":10,"cost":0.5}]}"#;
@@ -2034,7 +2059,9 @@ mod tests {
         assert_eq!(cache, 40);
 
         // 工具行：freebuff（companion）与 claude_code（covered）都在
-        let rows = UsageEventRepo.tool_usage_rows(&db, "day").expect("day tools");
+        let rows = UsageEventRepo
+            .tool_usage_rows(&db, "day")
+            .expect("day tools");
         let fb_row = rows
             .iter()
             .find(|r| r.tool_id == "freebuff")
@@ -2099,7 +2126,9 @@ mod tests {
         assert!(rows.iter().all(|r| r.tool_id != "freebuff"));
         assert!(rows.iter().any(|r| r.tool_id == "claude_code"));
         // 模型行无 freebuff 的模型
-        let models = UsageEventRepo.model_usage_rows(&db, "total").expect("models");
+        let models = UsageEventRepo
+            .model_usage_rows(&db, "total")
+            .expect("models");
         assert!(models.iter().all(|r| r.model != "freebuff-model"));
         assert!(models.iter().any(|r| r.model == "claude-3-5-sonnet"));
 
@@ -2149,7 +2178,9 @@ mod tests {
             .unified_range_stats(&db, "day")
             .expect("day stats");
         assert_eq!((input, output, cache, total), (40, 20, 40, 100));
-        let rows = UsageEventRepo.tool_usage_rows(&db, "day").expect("day tools");
+        let rows = UsageEventRepo
+            .tool_usage_rows(&db, "day")
+            .expect("day tools");
         assert!(rows.iter().all(|r| r.tool_id != "gemini"));
         assert!(rows.iter().any(|r| r.tool_id == "claude_code"));
     }
@@ -2190,8 +2221,14 @@ mod tests {
                     requests: 0,
                     cost_amount: None,
                     active_time_ms: 0,
-                    per_client: Some(vec![SeriesSplit { key: "workbuddy".into(), tokens: 1000 }]),
-                    per_model: Some(vec![SeriesSplit { key: "hy3".into(), tokens: 1000 }]),
+                    per_client: Some(vec![SeriesSplit {
+                        key: "workbuddy".into(),
+                        tokens: 1000,
+                    }]),
+                    per_model: Some(vec![SeriesSplit {
+                        key: "hy3".into(),
+                        tokens: 1000,
+                    }]),
                 },
                 TrendDay {
                     date: today.clone(),
@@ -2199,14 +2236,23 @@ mod tests {
                     requests: 0,
                     cost_amount: None,
                     active_time_ms: 0,
-                    per_client: Some(vec![SeriesSplit { key: "workbuddy".into(), tokens: 1000 }]),
-                    per_model: Some(vec![SeriesSplit { key: "hy3".into(), tokens: 1000 }]),
+                    per_client: Some(vec![SeriesSplit {
+                        key: "workbuddy".into(),
+                        tokens: 1000,
+                    }]),
+                    per_model: Some(vec![SeriesSplit {
+                        key: "hy3".into(),
+                        tokens: 1000,
+                    }]),
                 },
             ],
             active_days: 2,
             streak_days: 2,
             peak_day: None,
-            monthly: vec![TrendMonth { month: today[..7].to_string(), tokens: 2000 }],
+            monthly: vec![TrendMonth {
+                month: today[..7].to_string(),
+                tokens: 2000,
+            }],
             active_time_ms: 0,
             message_count: 10,
         };
@@ -2223,7 +2269,12 @@ mod tests {
             .find(|d| d.date == two_days_ago)
             .expect("two_days_ago");
         assert_eq!(d_prev.tokens, 200);
-        assert!(d_prev.per_client.as_ref().unwrap().iter().any(|s| s.key == "dsh"));
+        assert!(d_prev
+            .per_client
+            .as_ref()
+            .unwrap()
+            .iter()
+            .any(|s| s.key == "dsh"));
         let d_y = series
             .daily
             .iter()
@@ -2242,6 +2293,9 @@ mod tests {
         assert_eq!(series.streak_days, 3);
         assert_eq!(series.monthly[0].tokens, 2250);
         assert_eq!(series.message_count, 13);
-        assert_eq!(series.peak_day.as_ref().map(|d| d.date.as_str()), Some(yesterday.as_str()));
+        assert_eq!(
+            series.peak_day.as_ref().map(|d| d.date.as_str()),
+            Some(yesterday.as_str())
+        );
     }
 }

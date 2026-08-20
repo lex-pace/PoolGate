@@ -135,7 +135,7 @@ pub fn read_logs(
                 .map(|kw| line.to_lowercase().contains(kw))
                 .unwrap_or(true)
         })
-        .map(|line| sanitize_line(line))
+        .map(sanitize_line)
         .collect();
 
     lines.reverse(); // newest first

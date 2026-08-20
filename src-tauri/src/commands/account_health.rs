@@ -28,10 +28,7 @@ pub async fn check_account_health(
     let provider = state
         .db
         .providers
-        .get_by_id(
-            &state.db.conn,
-            &account.provider_id.as_deref().unwrap_or(""),
-        )?
+        .get_by_id(&state.db.conn, account.provider_id.as_deref().unwrap_or(""))?
         .ok_or_else(|| "Provider not found".to_string())?;
 
     let result = checker.check_account(&account, &provider).await;
@@ -245,10 +242,11 @@ pub async fn cleanup_expired(state: State<'_, Arc<AppState>>) -> Result<serde_js
         if account.status.as_deref() == Some("disabled") {
             continue;
         }
-        if let Some(provider) = state.db.providers.get_by_id(
-            &state.db.conn,
-            &account.provider_id.as_deref().unwrap_or(""),
-        )? {
+        if let Some(provider) = state
+            .db
+            .providers
+            .get_by_id(&state.db.conn, account.provider_id.as_deref().unwrap_or(""))?
+        {
             let result = checker.check_account(account, &provider).await;
 
             match &result {

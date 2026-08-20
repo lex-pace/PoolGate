@@ -19,7 +19,15 @@ const SUBSCRIPTION_JITTER_MS: u64 = 120;
 pub fn is_subscription_credential(credential_type: Option<&str>) -> bool {
     matches!(
         credential_type,
-        Some("oauth" | "token" | "codex_oauth" | "claude_oauth" | "gemini_oauth" | "grok_oauth" | "copilot_pat")
+        Some(
+            "oauth"
+                | "token"
+                | "codex_oauth"
+                | "claude_oauth"
+                | "gemini_oauth"
+                | "grok_oauth"
+                | "copilot_pat"
+        )
     )
 }
 

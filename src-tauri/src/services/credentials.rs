@@ -91,6 +91,25 @@ pub fn api_key_secret(account: &Account) -> Result<String, String> {
         .ok_or_else(|| "Account credential cannot be used as an API key".to_string())
 }
 
+/// Single availability predicate shared by routing, tray summaries and model selection.
+/// A credential can be structurally routable while still being unavailable because
+/// its persisted status or latest health result is terminal.
+pub fn is_available_for_routing(account: &Account) -> bool {
+    is_directly_routable(account)
+        && !matches!(
+            account.status.as_deref(),
+            Some("disabled") | Some("error") | Some("exhausted") | Some("token_expired")
+        )
+        && !matches!(account.health_status.as_deref(), Some("error"))
+}
+
+pub fn is_directly_routable(account: &Account) -> bool {
+    matches!(
+        account.credential_type.as_deref().unwrap_or("api_key"),
+        "api_key" | "upstream_key" | "oauth" | "token" | "codex_oauth"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -150,23 +169,4 @@ mod tests {
             Ok(AuthCredential::Bearer("oauth-test".into()))
         );
     }
-}
-
-/// Single availability predicate shared by routing, tray summaries and model selection.
-/// A credential can be structurally routable while still being unavailable because
-/// its persisted status or latest health result is terminal.
-pub fn is_available_for_routing(account: &Account) -> bool {
-    is_directly_routable(account)
-        && !matches!(
-            account.status.as_deref(),
-            Some("disabled") | Some("error") | Some("exhausted") | Some("token_expired")
-        )
-        && !matches!(account.health_status.as_deref(), Some("error"))
-}
-
-pub fn is_directly_routable(account: &Account) -> bool {
-    matches!(
-        account.credential_type.as_deref().unwrap_or("api_key"),
-        "api_key" | "upstream_key" | "oauth" | "token" | "codex_oauth"
-    )
 }

@@ -21,9 +21,21 @@ use crate::AppState;
 /// tokscale 覆盖但无手写适配器的工具（检测用元数据）。
 /// (tool_id, display_name, vendor, cli_names, home 下数据目录)
 const COVERED_NO_ADAPTER: &[(&str, &str, Option<&str>, &[&str], &[&str])] = &[
-    ("gemini", "Gemini CLI", Some("Google"), &["gemini"], &[".gemini", ".config/gemini"]),
+    (
+        "gemini",
+        "Gemini CLI",
+        Some("Google"),
+        &["gemini"],
+        &[".gemini", ".config/gemini"],
+    ),
     ("trae", "Trae", Some("ByteDance"), &["trae"], &[".trae"]),
-    ("trae_solo", "Trae Solo", Some("ByteDance"), &[], &[".trae-solo"]),
+    (
+        "trae_solo",
+        "Trae Solo",
+        Some("ByteDance"),
+        &[],
+        &[".trae-solo"],
+    ),
 ];
 
 /// 注册表适配器的 CLI 二进制提示（`discover()` 已覆盖数据目录；这里补
@@ -157,9 +169,7 @@ pub(crate) fn enable_tool_monitoring(
         .map(|a| a.descriptor().tool_id.clone())
         .collect();
     for id in tool_ids {
-        if !registry_ids.contains(id)
-            && !COVERED_NO_ADAPTER.iter().any(|(tid, ..)| *tid == id)
-        {
+        if !registry_ids.contains(id) && !COVERED_NO_ADAPTER.iter().any(|(tid, ..)| *tid == id) {
             return Err(format!("「{id}」没有可用的采集适配器，无法加入监控"));
         }
     }
@@ -269,7 +279,10 @@ fn find_cli(names: &[&str]) -> Option<String> {
         }
     }
     #[cfg(target_os = "macos")]
-    dirs.extend([PathBuf::from("/opt/homebrew/bin"), PathBuf::from("/usr/local/bin")]);
+    dirs.extend([
+        PathBuf::from("/opt/homebrew/bin"),
+        PathBuf::from("/usr/local/bin"),
+    ]);
     #[cfg(target_os = "linux")]
     dirs.extend([PathBuf::from("/usr/local/bin"), PathBuf::from("/usr/bin")]);
 
@@ -344,7 +357,8 @@ mod tests {
     #[test]
     fn enable_tool_monitoring_rejects_unknown_tool() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let database = crate::db::Database::new(&dir.path().join("test.db")).expect("open database");
+        let database =
+            crate::db::Database::new(&dir.path().join("test.db")).expect("open database");
         database.run_migrations().expect("migrate");
         let state = Arc::new(AppState {
             db: database,
@@ -368,7 +382,8 @@ mod tests {
     #[test]
     fn enable_tool_monitoring_upserts_and_enables_registry_tool() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let database = crate::db::Database::new(&dir.path().join("test.db")).expect("open database");
+        let database =
+            crate::db::Database::new(&dir.path().join("test.db")).expect("open database");
         database.run_migrations().expect("migrate");
         let state = Arc::new(AppState {
             db: database,

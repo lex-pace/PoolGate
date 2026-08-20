@@ -53,10 +53,10 @@ pub enum Tone {
 impl Tone {
     fn rgb(self) -> [u8; 3] {
         match self {
-            Tone::Online => [52, 199, 89],   // #34c759
-            Tone::Active => [10, 132, 255],  // #0a84ff
+            Tone::Online => [52, 199, 89],    // #34c759
+            Tone::Active => [10, 132, 255],   // #0a84ff
             Tone::QuotaWarn => [255, 149, 0], // #ff9500
-            Tone::Offline => [255, 69, 58],  // #ff453a
+            Tone::Offline => [255, 69, 58],   // #ff453a
         }
     }
 }
@@ -219,7 +219,10 @@ fn build_tooltip(
     top1_tool: Option<&str>,
     top1_model: Option<&str>,
 ) -> String {
-    let mut tip = format!("PoolGate · {state_label} · 今日 {} Tokens", with_commas(today));
+    let mut tip = format!(
+        "PoolGate · {state_label} · 今日 {} Tokens",
+        with_commas(today)
+    );
     if let Some(name) = top1_tool.filter(|s| !s.is_empty()) {
         tip.push_str(&format!(" · Top1 工具 {name}"));
     }
@@ -323,7 +326,10 @@ pub fn apply_menu_bar_with_appearance<R: Runtime>(
     let main_setting = state
         .db
         .settings
-        .get(&state.db.conn, crate::commands::settings_commands::MENU_BAR_MAIN_TEXT)?
+        .get(
+            &state.db.conn,
+            crate::commands::settings_commands::MENU_BAR_MAIN_TEXT,
+        )?
         .unwrap_or_else(|| "tokens".to_string());
     let main = MainText::from_setting(&main_setting);
     let today = today_tokens(state);
@@ -421,7 +427,7 @@ fn with_commas(value: i64) -> String {
     let bytes = digits.as_bytes();
     let mut out = String::with_capacity(bytes.len() + 3);
     for (i, b) in bytes.iter().enumerate() {
-        if i > 0 && (bytes.len() - i) % 3 == 0 {
+        if i > 0 && (bytes.len() - i).is_multiple_of(3) {
             out.push(',');
         }
         out.push(*b as char);
@@ -490,18 +496,13 @@ const CUTOUT_STROKE_ALPHA: u8 = (0.38 * 255.0) as u8;
 ///   拿不到自动适配；
 /// - 改用 [Appearance] 在渲染期根据 `window.theme()` 选择浅色/深色菜单栏
 ///   对应的「暖灰近黑 / 近白色」基色，兼得柔和对齐与深浅适配。
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum Appearance {
     /// 浅色菜单栏：白色实心方块，P 与符号为透明镂空。
+    #[default]
     Light,
     /// 深色菜单栏：同样使用白色实心方块，P 与符号为透明镂空。
     Dark,
-}
-
-impl Default for Appearance {
-    fn default() -> Self {
-        Self::Light
-    }
 }
 
 impl Appearance {
@@ -583,7 +584,16 @@ pub(crate) fn render_status_icon(
     let logo_mode = appearance.logo_mode();
     // 1) 状态光晕：状态色软径向渐变，先画（作为 Logo 背景色）；到半径处 alpha
     //    归零且边界在画布内，背景仍是完全透明（无方块/硬边）。
-    fill_glow(&mut buf, W, H, GLOW_CX, GLOW_CY, GLOW_R, GLOW_MAX_ALPHA, item.tone.rgb());
+    fill_glow(
+        &mut buf,
+        W,
+        H,
+        GLOW_CX,
+        GLOW_CY,
+        GLOW_R,
+        GLOW_MAX_ALPHA,
+        item.tone.rgb(),
+    );
     // 2) 云朵-P Logo：两种外观都使用单色实心底 + 透明镂空，只有主色不同。
     if let Some(icon) = cloud_p_icon().or(app_icon) {
         draw_icon_scaled(
@@ -648,8 +658,7 @@ fn fill_glow(
             }
             let idx = ((py * w + px) * 4) as usize;
             for k in 0..3 {
-                buf[idx + k] =
-                    (color[k] as f32 * a + buf[idx + k] as f32 * (1.0 - a)) as u8;
+                buf[idx + k] = (color[k] as f32 * a + buf[idx + k] as f32 * (1.0 - a)) as u8;
             }
             buf[idx + 3] = (a * 255.0 + buf[idx + 3] as f32 * (1.0 - a)).round() as u8;
         }
@@ -933,32 +942,71 @@ mod tests {
             .and_then(|bytes| Image::from_bytes(&bytes).ok());
         eprintln!("real icon loaded: {}", icon.is_some());
         let items: &[(&str, MenuBarItem)] = &[
-            ("online", MenuBarItem { tone: Tone::Online, text: "今日 240K".into(), tooltip: String::new() }),
-            ("active", MenuBarItem { tone: Tone::Active, text: "今日 240K".into(), tooltip: String::new() }),
-            ("warn", MenuBarItem { tone: Tone::QuotaWarn, text: "今日 240K".into(), tooltip: String::new() }),
-            ("offline", MenuBarItem { tone: Tone::Offline, text: "今日 240K".into(), tooltip: String::new() }),
+            (
+                "online",
+                MenuBarItem {
+                    tone: Tone::Online,
+                    text: "今日 240K".into(),
+                    tooltip: String::new(),
+                },
+            ),
+            (
+                "active",
+                MenuBarItem {
+                    tone: Tone::Active,
+                    text: "今日 240K".into(),
+                    tooltip: String::new(),
+                },
+            ),
+            (
+                "warn",
+                MenuBarItem {
+                    tone: Tone::QuotaWarn,
+                    text: "今日 240K".into(),
+                    tooltip: String::new(),
+                },
+            ),
+            (
+                "offline",
+                MenuBarItem {
+                    tone: Tone::Offline,
+                    text: "今日 240K".into(),
+                    tooltip: String::new(),
+                },
+            ),
         ];
         for (name, item) in items {
             let img_light = render_status_icon(item, icon.as_ref(), Appearance::Light);
             let img_dark = render_status_icon(item, icon.as_ref(), Appearance::Dark);
             // 亮菜单栏下暖灰近黑色块主场；深菜单栏下近白剪影主场。
-            dump_ppm(&dir, &format!("{name}-lightbar-light"), &img_light, [232, 232, 236]);
-            dump_ppm(&dir, &format!("{name}-darkbar-dark"), &img_dark, [38, 38, 42]);
+            dump_ppm(
+                &dir,
+                &format!("{name}-lightbar-light"),
+                &img_light,
+                [232, 232, 236],
+            );
+            dump_ppm(
+                &dir,
+                &format!("{name}-darkbar-dark"),
+                &img_dark,
+                [38, 38, 42],
+            );
             // 也输出原始 RGBA（保 alpha），便于带透明背景的渲染 / 检查
             // 圆角蒙版。两种外观各一份。
             for (suffix, img) in [("light", &img_light), ("dark", &img_dark)] {
                 let rgba = img.rgba();
                 let mut bytes = Vec::with_capacity(rgba.len());
                 bytes.extend_from_slice(rgba);
-                std::fs::write(
-                    dir.join(format!("{name}-raw-{suffix}.rgba")),
-                    &bytes,
-                )
-                .unwrap();
+                std::fs::write(dir.join(format!("{name}-raw-{suffix}.rgba")), &bytes).unwrap();
                 std::fs::write(
                     dir.join(format!("{name}-raw-{suffix}.meta")),
-                    format!("{} {}
-", img.width(), img.height()).as_bytes(),
+                    format!(
+                        "{} {}
+",
+                        img.width(),
+                        img.height()
+                    )
+                    .as_bytes(),
                 )
                 .unwrap();
             }
@@ -1011,16 +1059,40 @@ mod tests {
     #[test]
     fn combined_severity_priority() {
         // 网关离线（红）优先于一切
-        assert_eq!(combined_status(false, false, Some(90.0)), (Tone::Offline, "网关离线"));
-        assert_eq!(combined_status(false, false, Some(8.0)), (Tone::Offline, "网关离线"));
-        assert_eq!(combined_status(false, false, None), (Tone::Offline, "网关离线"));
+        assert_eq!(
+            combined_status(false, false, Some(90.0)),
+            (Tone::Offline, "网关离线")
+        );
+        assert_eq!(
+            combined_status(false, false, Some(8.0)),
+            (Tone::Offline, "网关离线")
+        );
+        assert_eq!(
+            combined_status(false, false, None),
+            (Tone::Offline, "网关离线")
+        );
         // 额度告警/耗尽（橙）> 流量活跃（蓝）> 正常（绿）
-        assert_eq!(combined_status(true, true, Some(8.0)), (Tone::QuotaWarn, "额度告警"));
-        assert_eq!(combined_status(true, false, Some(2.0)), (Tone::QuotaWarn, "额度耗尽"));
-        assert_eq!(combined_status(true, true, Some(90.0)), (Tone::Active, "流量活跃"));
-        assert_eq!(combined_status(true, false, Some(90.0)), (Tone::Online, "在线"));
+        assert_eq!(
+            combined_status(true, true, Some(8.0)),
+            (Tone::QuotaWarn, "额度告警")
+        );
+        assert_eq!(
+            combined_status(true, false, Some(2.0)),
+            (Tone::QuotaWarn, "额度耗尽")
+        );
+        assert_eq!(
+            combined_status(true, true, Some(90.0)),
+            (Tone::Active, "流量活跃")
+        );
+        assert_eq!(
+            combined_status(true, false, Some(90.0)),
+            (Tone::Online, "在线")
+        );
         // 无额度数据时只看网关：活跃 → 蓝，否则绿
-        assert_eq!(combined_status(true, true, None), (Tone::Active, "流量活跃"));
+        assert_eq!(
+            combined_status(true, true, None),
+            (Tone::Active, "流量活跃")
+        );
         assert_eq!(combined_status(true, false, None), (Tone::Online, "在线"));
     }
 
@@ -1028,17 +1100,42 @@ mod tests {
     fn main_text_selects_content() {
         // 三选一主文本（带含义标签）：tokens → 「今日 240.4K」；top1_tool/top1_model
         // → 「工具 / 模型 第一名」
-        assert_eq!(main_text_value(MainText::Tokens, 240_408, Some("Claude Code"), Some("gpt-4o")), "今日 240.4K");
-        assert_eq!(main_text_value(MainText::Top1Tool, 240_408, Some("Claude Code"), None), "工具 Claude Code");
-        assert_eq!(main_text_value(MainText::Top1Model, 240_408, None, Some("gpt-4o")), "模型 gpt-4o");
+        assert_eq!(
+            main_text_value(
+                MainText::Tokens,
+                240_408,
+                Some("Claude Code"),
+                Some("gpt-4o")
+            ),
+            "今日 240.4K"
+        );
+        assert_eq!(
+            main_text_value(MainText::Top1Tool, 240_408, Some("Claude Code"), None),
+            "工具 Claude Code"
+        );
+        assert_eq!(
+            main_text_value(MainText::Top1Model, 240_408, None, Some("gpt-4o")),
+            "模型 gpt-4o"
+        );
         // Top1 超长名截断：名称预算 = MAX_TEXT_CHARS - 标签长度（3），总长不超 MAX_TEXT_CHARS
-        let long = main_text_value(MainText::Top1Model, 240_408, None, Some("claude-sonnet-4-5-20241022"));
+        let long = main_text_value(
+            MainText::Top1Model,
+            240_408,
+            None,
+            Some("claude-sonnet-4-5-20241022"),
+        );
         assert_eq!(long.chars().count(), MAX_TEXT_CHARS);
         assert!(long.starts_with("模型 "));
         assert!(long.ends_with('…'));
         // 无 Top1 数据时回退到今日 Tokens（带「今日 」标签）
-        assert_eq!(main_text_value(MainText::Top1Tool, 240_408, None, None), "今日 240.4K");
-        assert_eq!(main_text_value(MainText::Top1Model, 240_408, Some(""), Some("")), "今日 240.4K");
+        assert_eq!(
+            main_text_value(MainText::Top1Tool, 240_408, None, None),
+            "今日 240.4K"
+        );
+        assert_eq!(
+            main_text_value(MainText::Top1Model, 240_408, Some(""), Some("")),
+            "今日 240.4K"
+        );
         // 设置字符串解析
         assert_eq!(MainText::from_setting("top1_tool"), MainText::Top1Tool);
         assert_eq!(MainText::from_setting("top1_model"), MainText::Top1Model);
@@ -1049,9 +1146,15 @@ mod tests {
     #[test]
     fn truncate_display_shortens() {
         assert_eq!(truncate_display("Claude Code", 16), "Claude Code");
-        assert_eq!(truncate_display("claude-sonnet-4-5", 16), "claude-sonnet-4…");
+        assert_eq!(
+            truncate_display("claude-sonnet-4-5", 16),
+            "claude-sonnet-4…"
+        );
         // 中文字符按字符截断
-        assert_eq!(truncate_display("这是一个非常长的工具名字", 8), "这是一个非常长…");
+        assert_eq!(
+            truncate_display("这是一个非常长的工具名字", 8),
+            "这是一个非常长…"
+        );
     }
 
     #[test]
@@ -1062,7 +1165,11 @@ mod tests {
         //   LOGO 区域大部分像素为主色且 alpha 接近 255（实心方块）。
         // - Dark (Cutout)：与 Light 完全相同的白色透明镂空结构。
         let icon = test_app_icon();
-        let item = MenuBarItem { tone: Tone::Online, text: String::new(), tooltip: String::new() };
+        let item = MenuBarItem {
+            tone: Tone::Online,
+            text: String::new(),
+            tooltip: String::new(),
+        };
         // Light: Cutout 实心方块。LOGO 区域应充满主色。
         let img_light = render_status_icon(&item, Some(&icon), Appearance::Light);
         assert_eq!(img_light.width(), STATUS_CANVAS_W, "画布 = Logo + 状态点");
@@ -1089,13 +1196,20 @@ mod tests {
         // 两种外观共有不变量：
         // 1) 右上/右下角外侧仍透明（光晕不溢出右侧 GAP，无方块/容器硬边）；
         // 2) 状态点/光晕存在：强彩色像素（绿/蓝/橙/红）> 0。
-        let corner = |img: &[u8], width: u32, x: u32, y: u32| {
-            img[((y * width + x) * 4) as usize + 3]
-        };
+        let corner =
+            |img: &[u8], width: u32, x: u32, y: u32| img[((y * width + x) * 4) as usize + 3];
         assert_eq!(corner(rgba_light, w, w - 1, 0), 0, "Light 右上角透明");
-        assert_eq!(corner(rgba_light, w, w - 1, STATUS_LOGO_SIZE - 1), 0, "Light 右下角透明");
+        assert_eq!(
+            corner(rgba_light, w, w - 1, STATUS_LOGO_SIZE - 1),
+            0,
+            "Light 右下角透明"
+        );
         assert_eq!(corner(rgba_dark, w, w - 1, 0), 0, "Dark 右上角透明");
-        assert_eq!(corner(rgba_dark, w, w - 1, STATUS_LOGO_SIZE - 1), 0, "Dark 右下角透明");
+        assert_eq!(
+            corner(rgba_dark, w, w - 1, STATUS_LOGO_SIZE - 1),
+            0,
+            "Dark 右下角透明"
+        );
         assert!(
             count_chromatic(rgba_light) > 20,
             "Light 图标应含状态点/光晕等彩色像素"
@@ -1118,7 +1232,11 @@ mod tests {
                 Appearance::Dark => 200,
             };
             let logo_max = |tone: Tone| {
-                let item = MenuBarItem { tone, text: String::new(), tooltip: String::new() };
+                let item = MenuBarItem {
+                    tone,
+                    text: String::new(),
+                    tooltip: String::new(),
+                };
                 let img = render_status_icon(&item, Some(&icon), appearance);
                 let w = img.width();
                 img.rgba()
@@ -1127,7 +1245,8 @@ mod tests {
                     .filter(|(i, _)| {
                         let x = (i % w as usize) as u32;
                         let y = (i / w as usize) as u32;
-                        x >= LOGO_X && x < LOGO_X + LOGO_SIZE && y >= LOGO_Y && y < LOGO_Y + LOGO_SIZE
+                        (LOGO_X..LOGO_X + LOGO_SIZE).contains(&x)
+                            && (LOGO_Y..LOGO_Y + LOGO_SIZE).contains(&y)
                     })
                     .map(|(_, p)| p[3])
                     .max()
@@ -1143,7 +1262,11 @@ mod tests {
                 );
             }
             // 主色命中（任意 alpha>50）至少有几个像素，避免回归。
-            let item = MenuBarItem { tone: Tone::Online, text: String::new(), tooltip: String::new() };
+            let item = MenuBarItem {
+                tone: Tone::Online,
+                text: String::new(),
+                tooltip: String::new(),
+            };
             let expected = appearance.logo_color();
             let img = render_status_icon(&item, Some(&icon), appearance);
             let w = img.width();
@@ -1174,10 +1297,8 @@ mod tests {
             .filter(|(i, p)| {
                 let x = (i % width as usize) as u32;
                 let y = (i / width as usize) as u32;
-                x >= LOGO_X
-                    && x < LOGO_X + LOGO_SIZE
-                    && y >= LOGO_Y
-                    && y < LOGO_Y + LOGO_SIZE
+                (LOGO_X..LOGO_X + LOGO_SIZE).contains(&x)
+                    && (LOGO_Y..LOGO_Y + LOGO_SIZE).contains(&y)
                     && p[3] >= min_alpha
                     && p[0].abs_diff(expected[0]) <= tolerance
                     && p[1].abs_diff(expected[1]) <= tolerance
@@ -1191,8 +1312,16 @@ mod tests {
         // 状态点/光晕颜色随状态变化：在线 → 绿点绿光晕；离线 → 红点红光晕。
         // 取浅色菜单栏外观（LogoMode=Cutout）渲染，与之前断言一致。
         let icon = test_app_icon();
-        let online = MenuBarItem { tone: Tone::Online, text: String::new(), tooltip: String::new() };
-        let offline = MenuBarItem { tone: Tone::Offline, text: String::new(), tooltip: String::new() };
+        let online = MenuBarItem {
+            tone: Tone::Online,
+            text: String::new(),
+            tooltip: String::new(),
+        };
+        let offline = MenuBarItem {
+            tone: Tone::Offline,
+            text: String::new(),
+            tooltip: String::new(),
+        };
         let img_online = render_status_icon(&online, Some(&icon), Appearance::Light);
         let img_offline = render_status_icon(&offline, Some(&icon), Appearance::Light);
         let green = Tone::Online.rgb();
@@ -1205,8 +1334,10 @@ mod tests {
                 .filter(|(i, p)| {
                     let x = (i % w as usize) as u32;
                     let y = (i / w as usize) as u32;
-                    x >= DOT_CX as u32 - 3 && x <= DOT_CX as u32 + 3
-                        && y >= DOT_CY as u32 - 3 && y <= DOT_CY as u32 + 3
+                    x >= DOT_CX as u32 - 3
+                        && x <= DOT_CX as u32 + 3
+                        && y >= DOT_CY as u32 - 3
+                        && y <= DOT_CY as u32 + 3
                         && (p[0] as i32 - color[0] as i32).abs() < 40
                         && (p[1] as i32 - color[1] as i32).abs() < 40
                         && (p[2] as i32 - color[2] as i32).abs() < 40
@@ -1249,20 +1380,34 @@ mod tests {
             Some(LIGHT_LOGO_COLOR),
             true,
         );
-        let alpha_at = |rgba: &[u8], x: u32, y: u32| {
-            rgba[((y * STATUS_CANVAS_W + x) * 4) as usize + 3]
-        };
-        assert_eq!(alpha_at(&cutout, LOGO_SIZE / 2, LOGO_SIZE / 2), 0, "P/符号应透明");
-        assert!(alpha_at(&cutout, LOGO_SIZE / 8, LOGO_SIZE / 8) > 100, "Logo 整体应填满");
+        let alpha_at =
+            |rgba: &[u8], x: u32, y: u32| rgba[((y * STATUS_CANVAS_W + x) * 4) as usize + 3];
+        assert_eq!(
+            alpha_at(&cutout, LOGO_SIZE / 2, LOGO_SIZE / 2),
+            0,
+            "P/符号应透明"
+        );
+        assert!(
+            alpha_at(&cutout, LOGO_SIZE / 8, LOGO_SIZE / 8) > 100,
+            "Logo 整体应填满"
+        );
 
         // 两种外观都走同一套透明镂空结构；Logo 框外不应出现硬边或画布方块。
-        let item = MenuBarItem { tone: Tone::Online, text: String::new(), tooltip: String::new() };
+        let item = MenuBarItem {
+            tone: Tone::Online,
+            text: String::new(),
+            tooltip: String::new(),
+        };
         for appearance in [Appearance::Light, Appearance::Dark] {
             let img = render_status_icon(&item, Some(&icon), appearance);
             let w = img.width();
             let rgba = img.rgba();
             assert_eq!(alpha_at(rgba, w - 1, 0), 0, "{appearance:?} 右上角应透明");
-            assert_eq!(alpha_at(rgba, w - 1, img.height() - 1), 0, "{appearance:?} 右下角应透明");
+            assert_eq!(
+                alpha_at(rgba, w - 1, img.height() - 1),
+                0,
+                "{appearance:?} 右下角应透明"
+            );
         }
     }
 
@@ -1271,12 +1416,11 @@ mod tests {
     fn count_chromatic(rgba: &[u8]) -> usize {
         rgba.chunks_exact(4)
             .filter(|p| {
-                p[3] > 0
-                    && {
-                        let max = *p.iter().take(3).max().unwrap();
-                        let min = *p.iter().take(3).min().unwrap();
-                        (max as i32 - min as i32) > 24
-                    }
+                p[3] > 0 && {
+                    let max = *p.iter().take(3).max().unwrap();
+                    let min = *p.iter().take(3).min().unwrap();
+                    (max as i32 - min as i32) > 24
+                }
             })
             .count()
     }

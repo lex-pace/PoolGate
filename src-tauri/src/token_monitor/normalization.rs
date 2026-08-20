@@ -209,8 +209,14 @@ mod tests {
             "claude-opus-4-8"
         );
         // thinking 变体是不同模型，不能被别名吞掉
-        assert_ne!(normalize_model("claude-opus-4-8-thinking"), "claude-opus-4-8");
-        assert_eq!(normalize_model("claude-opus-4-8-thinking"), "claude-opus-4-8-thinking");
+        assert_ne!(
+            normalize_model("claude-opus-4-8-thinking"),
+            "claude-opus-4-8"
+        );
+        assert_eq!(
+            normalize_model("claude-opus-4-8-thinking"),
+            "claude-opus-4-8-thinking"
+        );
     }
 
     #[test]
@@ -230,7 +236,10 @@ mod tests {
         finalize(&mut e);
         assert_eq!(e.model_normalized.as_deref(), Some("claude-opus-4-8"));
         // model_raw 保留原始值，便于诊断
-        assert_eq!(e.model_raw.as_deref(), Some("MaaS_Cl_Opus_4.8_20260528_cache"));
+        assert_eq!(
+            e.model_raw.as_deref(),
+            Some("MaaS_Cl_Opus_4.8_20260528_cache")
+        );
     }
 
     #[test]

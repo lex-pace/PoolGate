@@ -44,8 +44,14 @@ impl Usage {
     /// Decode Anthropic Messages usage (`input_tokens` already excludes cache).
     pub fn from_anthropic_usage(usage: &serde_json::Value) -> Usage {
         Usage {
-            input_tokens: usage.get("input_tokens").and_then(Value::as_i64).unwrap_or(0),
-            output_tokens: usage.get("output_tokens").and_then(Value::as_i64).unwrap_or(0),
+            input_tokens: usage
+                .get("input_tokens")
+                .and_then(Value::as_i64)
+                .unwrap_or(0),
+            output_tokens: usage
+                .get("output_tokens")
+                .and_then(Value::as_i64)
+                .unwrap_or(0),
             cache_read_tokens: usage
                 .get("cache_read_input_tokens")
                 .and_then(Value::as_i64)
@@ -161,9 +167,11 @@ pub fn usage_from_response_body(body: &[u8]) -> Usage {
             Usage::from_anthropic_usage(usage)
         };
     }
-    let metadata = value
-        .get("usageMetadata")
-        .or_else(|| value.get("response").and_then(|node| node.get("usageMetadata")));
+    let metadata = value.get("usageMetadata").or_else(|| {
+        value
+            .get("response")
+            .and_then(|node| node.get("usageMetadata"))
+    });
     if let Some(metadata) = metadata {
         return Usage::from_gemini_metadata(metadata);
     }
@@ -268,9 +276,11 @@ pub fn sse_event_error(event_block: &str) -> Option<String> {
         .get("type")
         .and_then(serde_json::Value::as_str)
         .is_some_and(|kind| matches!(kind, "error" | "failed" | "response.failed"));
-    let error_node = value
-        .get("error")
-        .or_else(|| value.get("response").and_then(|response| response.get("error")));
+    let error_node = value.get("error").or_else(|| {
+        value
+            .get("response")
+            .and_then(|response| response.get("error"))
+    });
     let has_error_node = error_node.is_some_and(|node| node.is_object() || node.is_string());
     if !has_error_event && !has_error_node && !failed_type {
         return None;
@@ -286,7 +296,11 @@ pub fn sse_event_error(event_block: &str) -> Option<String> {
         .map(str::trim)
         .filter(|message| !message.is_empty())
         .map(str::to_string)
-        .or_else(|| error_node.and_then(serde_json::Value::as_str).map(str::to_string))
+        .or_else(|| {
+            error_node
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string)
+        })
         .or_else(|| upstream_error_message(data.as_bytes()))
 }
 
@@ -425,12 +439,18 @@ mod tests {
         let responses = usage_from_response_body(
             br#"{"response":{"usage":{"input_tokens":9,"output_tokens":4,"input_tokens_details":{"cached_tokens":2}}}}"#,
         );
-        assert_eq!((responses.input_tokens, responses.cache_read_tokens), (7, 2));
+        assert_eq!(
+            (responses.input_tokens, responses.cache_read_tokens),
+            (7, 2)
+        );
 
         let anthropic = usage_from_response_body(
             br#"{"usage":{"input_tokens":20,"output_tokens":8,"cache_read_input_tokens":5}}"#,
         );
-        assert_eq!((anthropic.input_tokens, anthropic.cache_read_tokens), (20, 5));
+        assert_eq!(
+            (anthropic.input_tokens, anthropic.cache_read_tokens),
+            (20, 5)
+        );
 
         let gemini = usage_from_response_body(
             br#"{"usageMetadata":{"promptTokenCount":11,"candidatesTokenCount":6,"cachedContentTokenCount":1}}"#,

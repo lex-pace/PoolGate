@@ -25,8 +25,8 @@ use crate::token_monitor::collector::CollectResult;
 use crate::token_monitor::collector::ToolAdapter;
 use crate::token_monitor::model::{
     AdapterCapabilities, CollectorCheckpoint, CollectorError, DataFormat, DataSource,
-    IncrementalMode, NormalizedUsageEvent, SessionQuery, SessionSummary, SourceType,
-    SupportLevel, ToolDescriptor, ToolKind, UsageAccuracy,
+    IncrementalMode, NormalizedUsageEvent, SessionQuery, SessionSummary, SourceType, SupportLevel,
+    ToolDescriptor, ToolKind, UsageAccuracy,
 };
 
 #[derive(Default)]
@@ -43,7 +43,9 @@ fn mtime_ms(path: &Path) -> Option<i64> {
 }
 
 /// 解析单个 datalog 文件 → (事件, 会话摘要)。逐行正则，正文不落库。
-fn parse_datalog(path: &Path) -> Result<(Vec<NormalizedUsageEvent>, Option<SessionSummary>), CollectorError> {
+fn parse_datalog(
+    path: &Path,
+) -> Result<(Vec<NormalizedUsageEvent>, Option<SessionSummary>), CollectorError> {
     let file = std::fs::File::open(path)
         .map_err(|e| CollectorError::PathMissing(format!("{path:?}: {e}")))?;
     // session 字段可选：部分文件的 env 行无 session（`model=…, ctx_window=…, cwd=…`）。
@@ -52,9 +54,10 @@ fn parse_datalog(path: &Path) -> Result<(Vec<NormalizedUsageEvent>, Option<Sessi
         r"^\*\*env:\*\* model=([^,]+), ctx_window=\d+(?:, session=([0-9a-fA-F-]+))?, cwd=(\S+)",
     )
     .expect("valid env regex");
-    let re_header = Regex::new(r"^# Turn (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})").expect("valid header regex");
-    let re_tokens =
-        Regex::new(r"\[tokens: prompt=(\d+)\+completion=(\d+)(?:, cache=(\d+)tok)?\]").expect("valid tokens regex");
+    let re_header =
+        Regex::new(r"^# Turn (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})").expect("valid header regex");
+    let re_tokens = Regex::new(r"\[tokens: prompt=(\d+)\+completion=(\d+)(?:, cache=(\d+)tok)?\]")
+        .expect("valid tokens regex");
     // 每轮耗时 `_(N.Ns)_`：用于把会话内逐轮时间戳从文件头推导出来（真实派生，
     // 非伪造）——既让指纹天然互异（避免同值轮次误去重），也让会话时间线更准确。
     let re_dur = Regex::new(r"\(([0-9.]+)s\)").expect("valid duration regex");
@@ -114,7 +117,9 @@ fn parse_datalog(path: &Path) -> Result<(Vec<NormalizedUsageEvent>, Option<Sessi
         let occurred_at = first_ts
             .as_deref()
             .map(|ts| header_plus_ms(ts, elapsed_ms))
-            .unwrap_or_else(|| chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
+            .unwrap_or_else(|| {
+                chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+            });
         events.push(NormalizedUsageEvent {
             source_type: SourceType::LocalDiscovered,
             tool_id: "atomcode".into(),
@@ -154,8 +159,15 @@ fn parse_datalog(path: &Path) -> Result<(Vec<NormalizedUsageEvent>, Option<Sessi
             project_id: cwd.as_ref().map(|p| hash_short(p)),
             title_redacted: Some(format!(
                 "{} · {}",
-                if project_display.is_empty() { "会话".into() } else { project_display },
-                first_ts.as_deref().and_then(|ts| ts.get(..10)).unwrap_or("")
+                if project_display.is_empty() {
+                    "会话".into()
+                } else {
+                    project_display
+                },
+                first_ts
+                    .as_deref()
+                    .and_then(|ts| ts.get(..10))
+                    .unwrap_or("")
             )),
             model_set: model.into_iter().collect(),
             started_at: first_ts.as_deref().map(|ts| header_plus_ms(ts, 0)),
@@ -284,9 +296,12 @@ pub(crate) fn backfill_missing_models(
     let (events, _) = parse_datalog(&source.path).map_err(|e| e.to_string())?;
     let mut models: HashMap<String, String> = HashMap::new();
     for e in &events {
-        if let (Some(model), Some(hash)) = (e.model_raw.as_deref(), e.source_locator_hash.as_deref())
+        if let (Some(model), Some(hash)) =
+            (e.model_raw.as_deref(), e.source_locator_hash.as_deref())
         {
-            models.entry(hash.to_string()).or_insert_with(|| model.to_string());
+            models
+                .entry(hash.to_string())
+                .or_insert_with(|| model.to_string());
         }
     }
     super::repair::repair_missing_models(conn, "atomcode", &models)
@@ -364,7 +379,11 @@ mod tests {
         let path = dir.path().join("2026-06-17_11-10-55.md");
         let mut f = std::fs::File::create(&path).unwrap();
         writeln!(f, "# Turn 2026-06-17 11:10:55 [build:867bc77]").unwrap();
-        writeln!(f, "**env:** model=GLM-5.2, ctx_window=200000, cwd=/Users/dev/wxbuddy").unwrap();
+        writeln!(
+            f,
+            "**env:** model=GLM-5.2, ctx_window=200000, cwd=/Users/dev/wxbuddy"
+        )
+        .unwrap();
         writeln!(f, "## Agent").unwrap();
         writeln!(f, "### Turn 1").unwrap();
         writeln!(f, "  _[tokens: prompt=100+completion=20]_").unwrap();
@@ -387,7 +406,11 @@ mod tests {
         let path = dir.path().join("2026-06-17_11-10-55.md");
         let mut f = std::fs::File::create(&path).unwrap();
         writeln!(f, "# Turn 2026-06-17 11:10:55 [build:867bc77]").unwrap();
-        writeln!(f, "**env:** model=GLM-5.2, ctx_window=200000, cwd=/Users/dev/wxbuddy").unwrap();
+        writeln!(
+            f,
+            "**env:** model=GLM-5.2, ctx_window=200000, cwd=/Users/dev/wxbuddy"
+        )
+        .unwrap();
         writeln!(f, "### Turn 1").unwrap();
         writeln!(f, "  _[tokens: prompt=100+completion=20]_").unwrap();
 

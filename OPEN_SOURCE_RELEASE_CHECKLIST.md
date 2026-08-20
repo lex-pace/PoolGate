@@ -15,8 +15,8 @@
 - [x] 已补充 `package.json` 与 Cargo 仓库元数据
 - [ ] 当前工作区改动尚未完成最终提交和远程推送，仍需在提交后确认发布快照干净
 - [ ] CI 尚未在 GitHub 上实际运行并变绿
-- [ ] Rust `fmt --check` 尚未通过
-- [ ] 严格 Clippy 尚未通过
+- [x] Rust `fmt --check` 已在本地通过
+- [ ] 严格 Clippy 尚未通过；CI 暂以非阻断 Clippy 告警模式运行，严格脚本保留为 `pnpm run lint:rust:strict`
 
 ## A. 必须由维护者处理的仓库内容
 

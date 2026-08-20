@@ -353,17 +353,16 @@ pub(crate) fn collect_with_adapter(
             // 在 v2 首次采集落库前清掉 v1 旧事件；落库后全量重建 rollup。
             let mut dsh_migrated = false;
             if tool_id == "dsh" {
-                dsh_migrated = migrate_dsh_v1_to_v2(&state).unwrap_or(false);
+                dsh_migrated = migrate_dsh_v1_to_v2(state).unwrap_or(false);
             }
             // 已关闭监控（enabled=0）的工具：事件不再落库（统计层也已剔除其历史数据）。
             // 对 tokscale 聚合扫描尤其必要——它一次性产出全部 covered 工具的事件。
             let disabled = load_disabled_tool_ids(&state.db.conn);
-            let events: Vec<crate::token_monitor::model::NormalizedUsageEvent> =
-                collect_result
-                    .events
-                    .into_iter()
-                    .filter(|e| !disabled.contains(&e.tool_id))
-                    .collect();
+            let events: Vec<crate::token_monitor::model::NormalizedUsageEvent> = collect_result
+                .events
+                .into_iter()
+                .filter(|e| !disabled.contains(&e.tool_id))
+                .collect();
             // tokscale 聚合引擎 = 快照替换语义(清空旧本地事件防双算);其余适配器增量幂等。
             // 注意:仅当本次确实产出了事件(未命中节流跳过)才替换——空快照绝不能清空已有数据。
             let is_tokscale = tool_id == "tokscale_aggregate";
@@ -379,8 +378,7 @@ pub(crate) fn collect_with_adapter(
                 // W8：tokscale 权威模式会话投影——聚合快照生成 tm_session，让 tokscale
                 // 覆盖的工具也出现在会话列表（tokscale 适配器本身不产出 sessions）。
                 // 只投影 covered 工具；companion 工具的会话仍由各自手写适配器产出。
-                let covered_refs: Vec<&str> =
-                    covered.iter().map(|s| s.as_str()).collect();
+                let covered_refs: Vec<&str> = covered.iter().map(|s| s.as_str()).collect();
                 match state
                     .db
                     .sessions
@@ -391,9 +389,9 @@ pub(crate) fn collect_with_adapter(
                             state.token_monitor.publish_session_changed(session.clone());
                         }
                     }
-                    Err(error) => tracing::warn!(
-                        "token_monitor: session projection failed: {error}"
-                    ),
+                    Err(error) => {
+                        tracing::warn!("token_monitor: session projection failed: {error}")
+                    }
                 }
                 n
             } else if is_tokscale {
@@ -423,18 +421,14 @@ pub(crate) fn collect_with_adapter(
             // (带模型)」双行 → TOKENS 双算 + 模型视图「未知模型」。按 source_locator_hash
             // 去重残留 + 回填缺模型行 + 重建 rollup（幂等，无待修快速短路）。
             let repaired = match tool_id {
-                "freebuff" => {
-                    crate::token_monitor::collector::freebuff::backfill_missing_models(
-                        &state.db.conn,
-                        source,
-                    )
-                }
-                "atomcode" => {
-                    crate::token_monitor::collector::atomcode::backfill_missing_models(
-                        &state.db.conn,
-                        source,
-                    )
-                }
+                "freebuff" => crate::token_monitor::collector::freebuff::backfill_missing_models(
+                    &state.db.conn,
+                    source,
+                ),
+                "atomcode" => crate::token_monitor::collector::atomcode::backfill_missing_models(
+                    &state.db.conn,
+                    source,
+                ),
                 _ => Ok(0),
             }
             .unwrap_or(0);

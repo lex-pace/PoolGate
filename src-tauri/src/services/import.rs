@@ -1299,7 +1299,7 @@ fn normalize_account(
             credentials.and_then(|map| string_at(map, &["base_url", "api_base_url", "apiBaseUrl"]))
         })
         .or_else(|| string_at(object, &["apiBaseUrl"]))
-        .unwrap_or_else(|| default_url)
+        .unwrap_or(default_url)
         .trim()
         .to_string();
     let mut base_urls = object
@@ -1793,7 +1793,9 @@ fn resolve_provider_in_transaction(
             // the exact same name AND Base URL but distinct credentials — that
             // is handled downstream via credential fingerprinting, not here.
             let _ = id;
-            name.trim().eq_ignore_ascii_case(account.provider_name.trim()) && same_url
+            name.trim()
+                .eq_ignore_ascii_case(account.provider_name.trim())
+                && same_url
         });
     drop(stmt);
     if let Some((id, _name, existing_protocols, existing_base_urls, existing_models)) = existing {
@@ -2716,18 +2718,13 @@ mod tests {
         // Conflict resolution persists credentials through the shared vault.
         let _vault = crate::services::keychain::test_vault_serial_guard();
         let db = test_db();
-        let base = |name: &str, expires: &str| {
-            ImportSourceRequest {
-            content: Some(
-                format!(
-                    r#"{{"name":"{name}","type":"codex","access_token":"same-secret","expires_at":"{expires}"}}"#
-                )
-                .into(),
-            ),
+        let base = |name: &str, expires: &str| ImportSourceRequest {
+            content: Some(format!(
+                r#"{{"name":"{name}","type":"codex","access_token":"same-secret","expires_at":"{expires}"}}"#
+            )),
             source_name: Some("auth.json".into()),
             paths: vec![],
             provider_hint: None,
-        }
         };
         let first = execute_request(
             &db,

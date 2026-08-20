@@ -15,9 +15,9 @@ pub mod cline;
 pub mod codebuddy;
 pub mod codex;
 pub mod cursor;
+pub mod custom_app;
 pub mod dsh;
 pub mod freebuff;
-pub mod custom_app;
 pub mod github_copilot;
 pub mod grok_build;
 pub mod hermes;
@@ -88,31 +88,31 @@ impl AdapterRegistry {
     pub fn all() -> Vec<Box<dyn ToolAdapter>> {
         vec![
             // ==== adapter registry ====  (W3 在此锚点后按字典序追加)
-            Box::new(antigravity::AntigravityAdapter::default()),
-            Box::new(atomcode::AtomCodeAdapter::default()),
-            Box::new(claude_code::ClaudeCodeAdapter::default()),
-            Box::new(cline::ClineAdapter::default()),
-            Box::new(codebuddy::CodebuddyAdapter::default()),
-            Box::new(codex::CodexAdapter::default()),
-            Box::new(cursor::CursorAdapter::default()),
-            Box::new(dsh::DshAdapter::default()),
-            Box::new(freebuff::FreebuffAdapter::default()),
-            Box::new(github_copilot::GithubCopilotAdapter::default()),
-            Box::new(grok_build::GrokBuildAdapter::default()),
-            Box::new(hermes::HermesAdapter::default()),
-            Box::new(kilo_code::KiloCodeAdapter::default()),
-            Box::new(kimi::KimiAdapter::default()),
-            Box::new(kiro::KiroAdapter::default()),
-            Box::new(mimo::MimoAdapter::default()),
-            Box::new(openclaw::OpenclawAdapter::default()),
-            Box::new(opencode::OpenCodeAdapter::default()),
-            Box::new(pi::PiAdapter::default()),
-            Box::new(proma::PromaAdapter::default()),
-            Box::new(qwen::QwenAdapter::default()),
-            Box::new(tokscale::TokscaleAdapter::default()),
-            Box::new(workbuddy::WorkbuddyAdapter::default()),
-            Box::new(zcode::ZcodeAdapter::default()),
-            Box::new(zed::ZedAdapter::default()),
+            Box::new(antigravity::AntigravityAdapter),
+            Box::new(atomcode::AtomCodeAdapter),
+            Box::new(claude_code::ClaudeCodeAdapter),
+            Box::new(cline::ClineAdapter),
+            Box::new(codebuddy::CodebuddyAdapter),
+            Box::new(codex::CodexAdapter),
+            Box::new(cursor::CursorAdapter),
+            Box::new(dsh::DshAdapter),
+            Box::new(freebuff::FreebuffAdapter),
+            Box::new(github_copilot::GithubCopilotAdapter),
+            Box::new(grok_build::GrokBuildAdapter),
+            Box::new(hermes::HermesAdapter),
+            Box::new(kilo_code::KiloCodeAdapter),
+            Box::new(kimi::KimiAdapter),
+            Box::new(kiro::KiroAdapter),
+            Box::new(mimo::MimoAdapter),
+            Box::new(openclaw::OpenclawAdapter),
+            Box::new(opencode::OpenCodeAdapter),
+            Box::new(pi::PiAdapter),
+            Box::new(proma::PromaAdapter),
+            Box::new(qwen::QwenAdapter),
+            Box::new(tokscale::TokscaleAdapter),
+            Box::new(workbuddy::WorkbuddyAdapter),
+            Box::new(zcode::ZcodeAdapter),
+            Box::new(zed::ZedAdapter),
         ]
     }
 }
