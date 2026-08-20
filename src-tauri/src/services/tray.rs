@@ -16,14 +16,15 @@ use tauri::{
     WebviewWindowBuilder, WindowEvent,
 };
 
-const TRAY_ID: &str = "poolgate-main-tray";
-const TRAY_WINDOW_LABEL: &str = "tray-card";
-const TRAY_WINDOW_WIDTH: f64 = 410.0;
-const TRAY_WINDOW_HEIGHT: f64 = 620.0;
-const TRAY_WINDOW_MIN_WIDTH: f64 = 386.0;
-const TRAY_WINDOW_MAX_WIDTH: f64 = 430.0;
-const TRAY_WINDOW_MIN_HEIGHT: f64 = 360.0;
-const TRAY_WINDOW_MAX_HEIGHT: f64 = 760.0;
+pub(crate) const TRAY_ID: &str = "poolgate-main-tray";
+pub(crate) const TRAY_WINDOW_LABEL: &str = "tray-card";
+// 设计规范：固定 380×720，禁止自适应/拖拽缩放（min=max）。
+const TRAY_WINDOW_WIDTH: f64 = 380.0;
+const TRAY_WINDOW_HEIGHT: f64 = 720.0;
+const TRAY_WINDOW_MIN_WIDTH: f64 = TRAY_WINDOW_WIDTH;
+const TRAY_WINDOW_MAX_WIDTH: f64 = TRAY_WINDOW_WIDTH;
+const TRAY_WINDOW_MIN_HEIGHT: f64 = TRAY_WINDOW_HEIGHT;
+const TRAY_WINDOW_MAX_HEIGHT: f64 = TRAY_WINDOW_HEIGHT;
 const DEFAULT_PROXY_PORT: u16 = 9800;
 const MAX_VISIBLE_POOLS: usize = 8;
 
@@ -164,12 +165,32 @@ pub fn setup_tray<R: Runtime>(app: &mut App<R>) -> Result<(), Box<dyn std::error
     let token_range = Arc::new(Mutex::new(TokenRange::Today));
     let event_range = token_range.clone();
 
-    // Don't set a native menu - we use the custom tray window (command card) instead.
-    // Both left and right clicks will toggle the tray window.
+    // 原生右键菜单（启动/停止网关、路由池、Tokens 统计、退出等），按启动时状态构建；
+    // 之后由 refresh_tray_menu 每 10s 重建以保持实时。左键不弹菜单，交给点击事件。
+    let menu = build_tray_menu(&app.handle().clone(), TokenRange::Today)?;
+    // 初始图标：macOS 用深色单色云朵-P（`LOGO_COLOR`）剪影 + 状态点（不启用
+    // NSImage 模板模式，否则彩色状态点会被染成黑白）；其他平台用应用图标。
+    // 启动后 apply_menu_bar 会按实时状态持续刷新图标与标题。
+    #[cfg(target_os = "macos")]
+    let initial_icon = {
+        use super::menu_bar::{render_status_icon, Appearance, MenuBarItem, Tone};
+        let initial_item = MenuBarItem {
+            tone: Tone::Offline, // 启动瞬间网关未运行；后续刷新会校正为真实状态
+            text: String::new(),
+            tooltip: String::new(),
+        };
+        // 启动瞬间可能没有可见 webview 能读取系统外观，按当前系统的
+        // `app.default_window_icon` 上下文推断不出——退化为 Light，
+        // 第一个 10s 刷新循环会自动校正为真实外观。
+        render_status_icon(&initial_item, app.default_window_icon(), Appearance::Light)
+    };
+    #[cfg(not(target_os = "macos"))]
+    let initial_icon = app.default_window_icon().cloned().unwrap();
     TrayIconBuilder::with_id(TRAY_ID)
         .show_menu_on_left_click(false)
+        .menu(&menu)
         .tooltip("PoolGate · 本地模型网关")
-        .icon(app.default_window_icon().cloned().unwrap())
+        .icon(initial_icon)
         .on_menu_event(move |app, event| {
             handle_menu_event(app, event.id.as_ref(), &event_range);
         })
@@ -181,9 +202,11 @@ pub fn setup_tray<R: Runtime>(app: &mut App<R>) -> Result<(), Box<dyn std::error
                 ..
             } = event
             {
-                // Left click and right click both toggle the tray window (command card)
-                if button == MouseButton::Left || button == MouseButton::Right {
-                    if let Err(error) = toggle_tray_window(tray.app_handle(), position.x, position.y) {
+                // 左键打开/关闭托盘面板；右键由系统弹出原生菜单（启动/停止网关等）
+                if button == MouseButton::Left {
+                    if let Err(error) =
+                        toggle_tray_window(tray.app_handle(), position.x, position.y)
+                    {
                         tracing::warn!("Unable to toggle tray command card: {}", error);
                     }
                 }
@@ -208,6 +231,12 @@ pub fn setup_tray<R: Runtime>(app: &mut App<R>) -> Result<(), Box<dyn std::error
             }
         }
     });
+
+    // 启动后立即按设置渲染菜单栏状态胶囊（10s 刷新循环与额度循环会持续更新）
+    {
+        let state = app.state::<Arc<AppState>>().inner().clone();
+        let _ = super::menu_bar::apply_menu_bar(&app.handle().clone(), &state);
+    }
 
     tracing::info!("PoolGate command-center tray initialized");
     Ok(())
@@ -294,15 +323,45 @@ fn handle_menu_event<R: Runtime>(
         }
         "copy_claude" => copy_config(app, &generate_claude_config(), "Claude Code"),
         "copy_codex" => copy_config(app, &generate_codex_config(), "Codex"),
+        // 局域网访问地址：点击任一 IP 即复制完整入口（http://<ip>:9800）。
+        id if id.starts_with("copy_lan_") => {
+            let ip = &id["copy_lan_".len()..];
+            copy_config(
+                app,
+                &format!("http://{}:{}", ip, DEFAULT_PROXY_PORT),
+                "局域网访问地址",
+            );
+        }
         "quit" => app.exit(0),
         _ => {}
     }
 }
 
-#[allow(dead_code)]
+fn build_monitor_tray_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
+    let menu = Menu::new(app)?;
+    menu.append(&MenuItem::with_id(
+        app,
+        "monitor_status",
+        "PoolGate Monitor · 仅 Token Monitor",
+        false,
+        None::<&str>,
+    )?)?;
+    menu.append(&PredefinedMenuItem::separator(app)?)?;
+    menu.append(&MenuItem::with_id(app, "refresh_tray", "刷新监控数据", true, None::<&str>)?)?;
+    menu.append(&MenuItem::with_id(app, "show_tray_card", "显示 Monitor 托盘", true, None::<&str>)?)?;
+    menu.append(&MenuItem::with_id(app, "show_window", "打开 Monitor 仪表盘", true, None::<&str>)?)?;
+    menu.append(&PredefinedMenuItem::separator(app)?)?;
+    menu.append(&MenuItem::with_id(app, "quit", "退出 PoolGate", true, Some("CmdOrCtrl+Q"))?)?;
+    Ok(menu)
+}
+
 fn build_tray_menu<R: Runtime>(app: &AppHandle<R>, range: TokenRange) -> tauri::Result<Menu<R>> {
     let state = app.state::<Arc<AppState>>();
+    if crate::commands::settings_commands::is_monitor_mode(state.inner()).unwrap_or(false) {
+        return build_monitor_tray_menu(app);
+    }
     let running = proxy_is_running(state.inner());
+    let listen_host = listen_host(state.inner());
     let enabled_pools = state
         .db
         .groups
@@ -321,12 +380,13 @@ fn build_tray_menu<R: Runtime>(app: &AppHandle<R>, range: TokenRange) -> tauri::
         app,
         "runtime_status",
         format!(
-            "PoolGate · {} · 127.0.0.1:{}",
+            "PoolGate · {} · {}:{}",
             if running {
                 "网关运行中"
             } else {
                 "网关已关闭"
             },
+            listen_host,
             DEFAULT_PROXY_PORT
         ),
         false,
@@ -346,6 +406,30 @@ fn build_tray_menu<R: Runtime>(app: &AppHandle<R>, range: TokenRange) -> tauri::
         None::<&str>,
     )?;
     menu.append(&toggle)?;
+    menu.append(&PredefinedMenuItem::separator(app)?)?;
+
+    // 实时状态行：最近 5 分钟网关流量 + 活跃会话数（每 10s 随菜单重建刷新）。
+    // 数据源为 request_logs（只统计走网关的请求），标注「网关流量」与电脑整体用量区分。
+    let (recent_requests, recent_tokens) = recent_traffic(state.inner());
+    let active_sessions = active_sessions_count(state.inner());
+    menu.append(&MenuItem::with_id(
+        app,
+        "live_recent_traffic",
+        format!(
+            "网关流量 · 最近 5 分钟 · {} 请求 · {} Tokens",
+            recent_requests,
+            format_tokens(recent_tokens)
+        ),
+        false,
+        None::<&str>,
+    )?)?;
+    menu.append(&MenuItem::with_id(
+        app,
+        "live_active_sessions",
+        format!("活跃会话 · {active_sessions}"),
+        false,
+        None::<&str>,
+    )?)?;
     menu.append(&PredefinedMenuItem::separator(app)?)?;
 
     let pools_title = MenuItem::with_id(
@@ -389,11 +473,13 @@ fn build_tray_menu<R: Runtime>(app: &AppHandle<R>, range: TokenRange) -> tauri::
     }
     menu.append(&PredefinedMenuItem::separator(app)?)?;
 
+    // Tokens 统计子菜单：所有数字均来自 request_logs（走网关的请求），
+    // 标题标注「网关」以区别于电脑整体 Tokens；子菜单内条目沿用其作用域。
     let token_menu = Submenu::with_id(
         app,
         "token_stats",
         format!(
-            "Tokens 统计 · {} · {}",
+            "网关 Tokens 统计 · {} · {}",
             range.label(),
             format_tokens(selected_stats.total_tokens)
         ),
@@ -486,6 +572,44 @@ fn build_tray_menu<R: Runtime>(app: &AppHandle<R>, range: TokenRange) -> tauri::
         None::<&str>,
     )?)?;
     menu.append(&tools)?;
+
+    // 局域网访问地址：LAN 监听时列出本机 IP，点击一键复制完整入口供同事配置；
+    // 仅本机监听时给出提示（开启入口在设置页「代理 → 监听地址」）。菜单每 10s
+    // 重建，IP 变化会自动跟随。
+    let lan_menu = Submenu::with_id(app, "lan_addresses", "局域网访问地址", true)?;
+    if listen_host == "0.0.0.0" {
+        match crate::commands::proxy_commands::lan_ipv4_addresses() {
+            Ok(ips) if !ips.is_empty() => {
+                for ip in ips {
+                    lan_menu.append(&MenuItem::with_id(
+                        app,
+                        format!("copy_lan_{}", ip),
+                        format!("复制 http://{}:{}", ip, DEFAULT_PROXY_PORT),
+                        true,
+                        None::<&str>,
+                    )?)?;
+                }
+            }
+            _ => {
+                lan_menu.append(&MenuItem::with_id(
+                    app,
+                    "lan_addresses_empty",
+                    "未检测到局域网地址",
+                    false,
+                    None::<&str>,
+                )?)?;
+            }
+        }
+    } else {
+        lan_menu.append(&MenuItem::with_id(
+            app,
+            "lan_addresses_localhost_only",
+            "仅本机监听 · 设置中可开启局域网共享",
+            false,
+            None::<&str>,
+        )?)?;
+    }
+    menu.append(&lan_menu)?;
     menu.append(&PredefinedMenuItem::separator(app)?)?;
     menu.append(&MenuItem::with_id(
         app,
@@ -497,19 +621,23 @@ fn build_tray_menu<R: Runtime>(app: &AppHandle<R>, range: TokenRange) -> tauri::
     Ok(menu)
 }
 
-fn refresh_tray_menu<R: Runtime>(app: &AppHandle<R>, _range: TokenRange) -> Result<(), String> {
-    // We don't use the native menu anymore - only update the tooltip.
-    let tray = app
-        .tray_by_id(TRAY_ID)
-        .ok_or_else(|| "找不到 PoolGate 托盘图标".to_string())?;
-    tray.set_tooltip(Some(
-        if proxy_is_running(app.state::<Arc<AppState>>().inner()) {
-            "PoolGate · 网关运行中"
-        } else {
-            "PoolGate · 网关已关闭"
-        },
-    ))
-    .map_err(|error| error.to_string())
+fn refresh_tray_menu<R: Runtime>(app: &AppHandle<R>, range: TokenRange) -> Result<(), String> {
+    let state = app.state::<Arc<AppState>>().inner().clone();
+    // 原生右键菜单按实时状态重建（网关运行/停止、路由池、Tokens 统计、退出等）。
+    // 菜单重建与图标应用都在主线程执行（NSMenu / NSStatusItem 不允许非主线程修改）。
+    let menu = build_tray_menu(app, range).ok();
+    let app_for_menu = app.clone();
+    app.run_on_main_thread(move || {
+        if let (Some(tray), Some(menu)) = (app_for_menu.tray_by_id(TRAY_ID), menu) {
+            if let Err(error) = tray.set_menu(Some(menu)) {
+                tracing::warn!("tray menu rebuild failed: {error}");
+            }
+        }
+    })
+    .map_err(|e| e.to_string())?;
+    // 菜单栏状态胶囊（图标 + 标题 + tooltip）由 menu_bar 统一渲染（单一图标：
+    // Logo + 状态点 + 主文本）。
+    super::menu_bar::apply_menu_bar(app, &state)
 }
 
 fn proxy_is_running(state: &Arc<AppState>) -> bool {
@@ -518,6 +646,57 @@ fn proxy_is_running(state: &Arc<AppState>) -> bool {
         .lock()
         .map(|proxy| proxy.is_some())
         .unwrap_or(false)
+}
+
+/// Host the gateway binds to (127.0.0.1 in localhost mode, 0.0.0.0 in LAN
+/// mode). When no server is running, falls back to the configured mode so the
+/// tray shows the address the gateway would bind to once started.
+fn listen_host(state: &Arc<AppState>) -> &'static str {
+    state
+        .proxy
+        .lock()
+        .map(|proxy| {
+            proxy
+                .as_ref()
+                .map(|handle| handle.listen_mode.bind_host())
+                .unwrap_or_else(|| {
+                    let mode = crate::commands::settings_commands::get_listen_addr(state)
+                        .unwrap_or_else(|_| "localhost".to_string());
+                    crate::proxy::server::ListenMode::from_setting(&mode).bind_host()
+                })
+        })
+        .unwrap_or("127.0.0.1")
+}
+
+/// 最近 5 分钟请求数与 Tokens（request_logs 聚合，用于右键菜单实时行）。
+/// 非精确审计口径（含全部尝试行），仅作实时流量指示。
+fn recent_traffic(state: &Arc<AppState>) -> (i64, i64) {
+    let Ok(conn) = state.db.conn.lock() else {
+        return (0, 0);
+    };
+    conn.query_row(
+        "SELECT COUNT(*), \
+         COALESCE(SUM(COALESCE(input_tokens,0) + COALESCE(output_tokens,0) + COALESCE(cache_tokens,0)), 0) \
+         FROM request_logs WHERE request_at >= datetime('now', '-5 minutes')",
+        [],
+        |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+    )
+    .unwrap_or((0, 0))
+}
+
+/// 活跃会话数：`tm_session` 中最近 5 分钟仍有活跃的会话（token-monitor 采集口径）；
+/// 采集未运行/表缺失时返回 0。
+fn active_sessions_count(state: &Arc<AppState>) -> i64 {
+    let Ok(conn) = state.db.conn.lock() else {
+        return 0;
+    };
+    conn.query_row(
+        "SELECT COUNT(*) FROM tm_session \
+         WHERE datetime(last_active_at, 'localtime') >= datetime('now', 'localtime', '-5 minutes')",
+        [],
+        |row| row.get::<_, i64>(0),
+    )
+    .unwrap_or(0)
 }
 
 fn load_token_stats(state: &Arc<AppState>, range: TokenRange) -> TokenRangeStats {
@@ -555,7 +734,6 @@ fn strategy_label(strategy: Option<&str>) -> &'static str {
     }
 }
 
-#[allow(dead_code)]
 fn format_tokens(value: i64) -> String {
     let value = value.max(0);
     if value >= 1_000_000_000 {
@@ -577,7 +755,7 @@ fn show_main_window<R: Runtime>(app: &AppHandle<R>) {
     }
 }
 
-fn toggle_tray_window<R: Runtime>(
+pub(crate) fn toggle_tray_window<R: Runtime>(
     app: &AppHandle<R>,
     click_x: f64,
     click_y: f64,
@@ -590,7 +768,18 @@ fn toggle_tray_window<R: Runtime>(
         let window = WebviewWindowBuilder::new(
             app,
             TRAY_WINDOW_LABEL,
-            WebviewUrl::App("index.html?view=tray".into()),
+            WebviewUrl::App(
+                if crate::commands::settings_commands::is_monitor_mode(
+                    &app.state::<Arc<AppState>>().inner().clone(),
+                )
+                .unwrap_or(false)
+                {
+                    "index.html?view=token-monitor"
+                } else {
+                    "index.html?view=tray"
+                }
+                .into(),
+            ),
         )
         .title("PoolGate 状态")
         .inner_size(TRAY_WINDOW_WIDTH, TRAY_WINDOW_HEIGHT)
@@ -602,8 +791,73 @@ fn toggle_tray_window<R: Runtime>(
         .visible_on_all_workspaces(true)
         .visible(false)
         .shadow(true)
+        // 页面加载完成后广播一次外观主题事件（此时前端监听器已就绪，不会丢失）。
+        // 事件载荷来自 settings 表（Rust 可读的镜像），让新加载的 webview 尽快应用
+        // 持久化主题，消除首次打开瞬间的默认浅色闪烁；localStorage 中的显式选择优先，
+        // 事件仅作兑底校正（见前端 ThemeProvider）。
+        .on_page_load(|window, payload| {
+            if matches!(payload.event(), tauri::webview::PageLoadEvent::Finished) {
+                let state = window.app_handle().state::<Arc<AppState>>().inner().clone();
+                match resolve_appearance_theme(&state, &window) {
+                    Ok((preference, theme)) => {
+                        use crate::commands::settings_commands::ACCOUNT_DISPLAY;
+                        // 账号脱敏/全展示偏好也随主题事件广播：新加载的托盘 webview
+                        // 在无本地显式选择时按 settings 表兜底（前端 localStorage 优先）。
+                        let account_display = state
+                            .db
+                            .settings
+                            .get(&state.db.conn, ACCOUNT_DISPLAY)
+                            .ok()
+                            .flatten();
+                        let mut payload = serde_json::json!({
+                            "theme": theme,
+                            "preference": preference,
+                        });
+                        if let Some(display) = account_display {
+                            payload["accountDisplay"] = serde_json::Value::String(display);
+                        }
+                        let _ = window.app_handle().emit_to(
+                            TRAY_WINDOW_LABEL,
+                            "appearance:theme",
+                            payload,
+                        );
+                    }
+                    Err(error) => tracing::warn!(
+                        "Unable to resolve tray appearance theme: {}",
+                        error
+                    ),
+                }
+            }
+        })
         .build()
         .map_err(|error| error.to_string())?;
+
+        // Liquid Glass 毛玻璃：透明窗口下唯有原生 vibrancy 能磨砂窗口背后的桌面。
+        // macOS 用 HudWindow 材质 + 28px 圆角，Windows 用 Acrylic。失败时静默降级为
+        // 纯 CSS 半透明外壳（不影响功能）。
+        #[cfg(target_os = "macos")]
+        {
+            use window_vibrancy::{apply_vibrancy, NSVisualEffectMaterial, NSVisualEffectState};
+            let _ = apply_vibrancy(
+                &window,
+                NSVisualEffectMaterial::HudWindow,
+                Some(NSVisualEffectState::Active),
+                Some(28.0),
+            );
+        }
+        #[cfg(target_os = "windows")]
+        {
+            // Acrylic tint 跟随主题：优先读 settings 表中 Rust 可读的偏好（浅色/深色/
+            // 随系统），玻璃不透明度自定义时同步映射到原生 alpha。读取失败时回退原浅色。
+            let state = app.state::<Arc<AppState>>().inner().clone();
+            match tray_acrylic_tint(&state, &window) {
+                Ok(tint) => {
+                    use window_vibrancy::apply_acrylic;
+                    let _ = apply_acrylic(&window, Some(tint));
+                }
+                Err(error) => tracing::warn!("Unable to resolve tray acrylic tint: {}", error),
+            }
+        }
 
         let hide_window = window.clone();
         window.on_window_event(move |event| {
@@ -643,15 +897,19 @@ pub fn open_poolgate_from_tray<R: Runtime>(
     app: AppHandle<R>,
     page: Option<String>,
     node: Option<String>,
+    tab: Option<String>,
 ) {
     if let Some(window) = app.get_webview_window(TRAY_WINDOW_LABEL) {
         let _ = window.hide();
     }
     show_main_window(&app);
     if let Some(page) = page {
-        let payload = match node {
-            Some(node) if !node.is_empty() => format!("{}?node={}", page, node),
-            _ => page,
+        let payload = if let Some(node) = node.filter(|node| !node.is_empty()) {
+            format!("{}?node={}", page, node)
+        } else if let Some(tab) = tab.filter(|tab| !tab.is_empty()) {
+            format!("{}?tab={}", page, tab)
+        } else {
+            page
         };
         let _ = app.emit_to("main", "tray:navigate", payload);
     }
@@ -972,6 +1230,76 @@ pub fn get_tray_snapshot(state: tauri::State<'_, Arc<AppState>>) -> Result<TrayS
         active_route,
         updated_at: Local::now().format("%H:%M:%S").to_string(),
     })
+}
+
+/// 从 settings 解析外观偏好：(preference, resolved_theme)。"system" 用窗口系统主题
+/// 解析（Windows/macOS 上 `window.theme()` 即系统主题；Linux 回退浅色，前端
+/// matchMedia 仍主导 CSS）。
+fn resolve_appearance_theme<R: Runtime>(
+    state: &Arc<AppState>,
+    window: &tauri::WebviewWindow<R>,
+) -> Result<(String, String), String> {
+    use crate::commands::settings_commands::THEME_PREFERENCE;
+    let preference = state
+        .db
+        .settings
+        .get(&state.db.conn, THEME_PREFERENCE)?
+        .unwrap_or_else(|| "system".to_string());
+    let resolved = match preference.as_str() {
+        "light" => "light",
+        "dark" => "dark",
+        _ => match window.theme().map_err(|error| error.to_string())? {
+            tauri::Theme::Dark => "dark",
+            _ => "light",
+        },
+    };
+    Ok((preference, resolved.to_string()))
+}
+
+/// Windows: 按 settings 中的主题/玻璃偏好重设托盘窗口的原生 Acrylic tint。
+/// 托盘窗口尚未创建时静默返回（创建分支会自行读取 settings）。
+#[cfg(target_os = "windows")]
+pub(crate) fn apply_tray_acrylic_from_settings<R: Runtime>(
+    app: &AppHandle<R>,
+    state: &Arc<AppState>,
+) -> Result<(), String> {
+    let Some(window) = app.get_webview_window(TRAY_WINDOW_LABEL) else {
+        return Ok(());
+    };
+    let tint = tray_acrylic_tint(state, &window)?;
+    use window_vibrancy::apply_acrylic;
+    apply_acrylic(&window, Some(tint)).map_err(|error| error.to_string())
+}
+
+/// 解析托盘窗口的 Acrylic tint：主题决定色调（深色 26,30,36 / 浅色 246,248,252），
+/// 用户自定义过玻璃不透明度时原生 alpha 跟随（0-100 → 0-255），否则使用低透明度
+/// Liquid Glass 默认（深 120 / 浅 112）。
+#[cfg(target_os = "windows")]
+fn tray_acrylic_tint<R: Runtime>(
+    state: &Arc<AppState>,
+    window: &tauri::WebviewWindow<R>,
+) -> Result<(u8, u8, u8, u8), String> {
+    use crate::commands::settings_commands::GLASS_OPACITY;
+    let (_preference, theme) = resolve_appearance_theme(state, window)?;
+    let dark = theme == "dark";
+    let (r, g, b, default_alpha) = if dark {
+        (26, 30, 36, 120)
+    } else {
+        (246, 248, 252, 112)
+    };
+    let alpha = match state
+        .db
+        .settings
+        .get(&state.db.conn, GLASS_OPACITY)?
+    {
+        Some(raw) => raw
+            .parse::<f64>()
+            .ok()
+            .map(|value| (value.clamp(0.0, 100.0) / 100.0 * 255.0).round() as u8)
+            .unwrap_or(default_alpha),
+        None => default_alpha,
+    };
+    Ok((r, g, b, alpha))
 }
 
 fn copy_config<R: Runtime>(app: &AppHandle<R>, config: &str, label: &str) {

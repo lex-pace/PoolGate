@@ -12,4 +12,5 @@ pub mod oauth_commands;
 pub mod provider_commands;
 pub mod proxy_commands;
 pub mod settings_commands;
+pub mod token_monitor_commands;
 pub mod upstream_models_commands;

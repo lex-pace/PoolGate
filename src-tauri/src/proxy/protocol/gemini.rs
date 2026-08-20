@@ -298,21 +298,23 @@ pub async fn handle_gemini_request(
             response_body.clone()
         };
 
-        let (input_tokens, output_tokens) = extract_usage(&unwrapped);
-        let usage = crate::proxy::protocol::Usage {
-            input_tokens,
-            output_tokens,
-            cache_tokens: 0,
-            available: serde_json::from_slice::<serde_json::Value>(&unwrapped)
-                .ok()
-                .and_then(|value| value.get("usageMetadata").cloned())
-                .is_some(),
+        let usage = crate::proxy::protocol::usage_from_response_body(&unwrapped);
+        // Keep the downstream-provided error detail for the request log.
+        let upstream_error = if status.is_success() {
+            None
+        } else {
+            crate::proxy::protocol::upstream_error_message(&unwrapped)
         };
         let mut response = Response::new(Body::from(unwrapped));
         *response.status_mut() = status;
         response
             .headers_mut()
             .insert("Content-Type", HeaderValue::from_static("application/json"));
+        if let Some(message) = upstream_error {
+            response
+                .extensions_mut()
+                .insert(crate::proxy::UpstreamErrorDetail(message));
+        }
         Ok((response, usage))
     }
 }
@@ -353,36 +355,35 @@ fn forward_antigravity_sse(
                         if trimmed.is_empty() {
                             continue;
                         }
-                        let out: Option<Bytes> = if let Some(payload) =
-                            trimmed.strip_prefix("data: ")
-                        {
-                            let payload = payload.trim();
-                            if payload == "[DONE]" {
-                                Some(Bytes::from_static(b"data: [DONE]\n\n"))
-                            } else {
-                                match serde_json::from_str::<Value>(payload) {
-                                    Ok(mut json) => {
-                                        // Unwrap the v1internal response wrapper.
-                                        if let Some(inner) =
-                                            json.get_mut("response").map(|v| v.take())
-                                        {
-                                            let encoded =
-                                                serde_json::to_string(&inner).unwrap_or_default();
-                                            Some(Bytes::from(format!("data: {}\n\n", encoded)))
-                                        } else {
-                                            Some(Bytes::from(format!("data: {}\n\n", payload)))
+                        let out: Option<Bytes> =
+                            if let Some(payload) = trimmed.strip_prefix("data: ") {
+                                let payload = payload.trim();
+                                if payload == "[DONE]" {
+                                    Some(Bytes::from_static(b"data: [DONE]\n\n"))
+                                } else {
+                                    match serde_json::from_str::<Value>(payload) {
+                                        Ok(mut json) => {
+                                            // Unwrap the v1internal response wrapper.
+                                            if let Some(inner) =
+                                                json.get_mut("response").map(|v| v.take())
+                                            {
+                                                let encoded = serde_json::to_string(&inner)
+                                                    .unwrap_or_default();
+                                                Some(Bytes::from(format!("data: {}\n\n", encoded)))
+                                            } else {
+                                                Some(Bytes::from(format!("data: {}\n\n", payload)))
+                                            }
+                                        }
+                                        Err(_) => {
+                                            // Not JSON — pass the raw line through.
+                                            Some(Bytes::from(format!("{}\n\n", trimmed)))
                                         }
                                     }
-                                    Err(_) => {
-                                        // Not JSON — pass the raw line through.
-                                        Some(Bytes::from(format!("{}\n\n", trimmed)))
-                                    }
                                 }
-                            }
-                        } else {
-                            // Non-data line (comment / blank / event name).
-                            Some(Bytes::from(line_raw))
-                        };
+                            } else {
+                                // Non-data line (comment / blank / event name).
+                                Some(Bytes::from(line_raw))
+                            };
                         if let Some(bytes) = out {
                             if tx.send(bytes).await.is_err() {
                                 return;
@@ -417,21 +418,8 @@ fn is_gemini_streaming_request(body: &[u8]) -> bool {
     false
 }
 
-/// Extract token usage from a Gemini response.
-/// Gemini returns `usageMetadata` with `promptTokenCount` and `candidatesTokenCount`.
-pub fn extract_usage(body: &[u8]) -> (i64, i64) {
-    if let Ok(val) = serde_json::from_slice::<serde_json::Value>(body) {
-        if let Some(usage) = val.get("usageMetadata") {
-            let input = usage
-                .get("promptTokenCount")
-                .and_then(|v| v.as_i64())
-                .unwrap_or(0);
-            let output = usage
-                .get("candidatesTokenCount")
-                .and_then(|v| v.as_i64())
-                .unwrap_or(0);
-            return (input, output);
-        }
-    }
-    (0, 0)
+/// Extract canonical token usage from a Gemini response (`usageMetadata`,
+/// cache-inclusive `promptTokenCount` normalized to the fresh-input caliber).
+pub fn extract_usage(body: &[u8]) -> crate::proxy::protocol::Usage {
+    crate::proxy::protocol::usage_from_response_body(body)
 }

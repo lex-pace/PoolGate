@@ -105,21 +105,23 @@ pub async fn handle_openai_request(
             StatusCode::BAD_GATEWAY
         })?;
 
-        let (input_tokens, output_tokens, _) = extract_usage(&response_body);
-        let usage = crate::proxy::protocol::Usage {
-            input_tokens,
-            output_tokens,
-            cache_tokens: 0,
-            available: serde_json::from_slice::<serde_json::Value>(&response_body)
-                .ok()
-                .and_then(|value| value.get("usage").cloned())
-                .is_some(),
+        let usage = crate::proxy::protocol::usage_from_response_body(&response_body);
+        // Keep the downstream-provided error detail for the request log.
+        let upstream_error = if status.is_success() {
+            None
+        } else {
+            crate::proxy::protocol::upstream_error_message(&response_body)
         };
         let mut response = Response::new(Body::from(response_body));
         *response.status_mut() = status;
         response
             .headers_mut()
             .insert("Content-Type", HeaderValue::from_static("application/json"));
+        if let Some(message) = upstream_error {
+            response
+                .extensions_mut()
+                .insert(crate::proxy::UpstreamErrorDetail(message));
+        }
         Ok((response, usage))
     }
 }
@@ -149,24 +151,9 @@ pub fn extract_model(body: &[u8]) -> Option<String> {
     None
 }
 
-/// Extract token usage from an OpenAI-compatible response body.
-pub fn extract_usage(body: &[u8]) -> (i64, i64, i64) {
-    if let Ok(val) = serde_json::from_slice::<serde_json::Value>(body) {
-        if let Some(usage) = val.get("usage") {
-            let input = usage
-                .get("prompt_tokens")
-                .and_then(|v| v.as_i64())
-                .unwrap_or(0);
-            let output = usage
-                .get("completion_tokens")
-                .and_then(|v| v.as_i64())
-                .unwrap_or(0);
-            let total = usage
-                .get("total_tokens")
-                .and_then(|v| v.as_i64())
-                .unwrap_or(0);
-            return (input, output, total);
-        }
-    }
-    (0, 0, 0)
+/// Extract canonical token usage from an OpenAI-compatible (Chat or Responses)
+/// response body. Cache tokens are decoded and normalized to the fresh-input
+/// caliber; see [`crate::proxy::protocol::Usage`].
+pub fn extract_usage(body: &[u8]) -> crate::proxy::protocol::Usage {
+    crate::proxy::protocol::usage_from_response_body(body)
 }

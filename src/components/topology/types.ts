@@ -14,6 +14,8 @@ export interface TopologyNodeData {
   subtitle: string;
   stats: string;
   detail: string;
+  /** Small pill rendered in the node head (e.g. pool strategy). */
+  badge?: string;
   health: TopologyHealth;
   enabled: boolean;
   active: boolean;
@@ -39,12 +41,13 @@ export interface TopologyEdgeData {
 
 export type TopologyFlowEdge = Edge<TopologyEdgeData, "topology">;
 
-/** Node size presets from the V2 layout spec (§4). */
+/** Node size presets — proportions follow the 2026-08-02 mockup: gateway is
+ *  the largest (icon block + 3 lines), providers are wide and short. */
 export const NODE_SIZES: Record<TopologyNodeKind, { width: number; height: number }> = {
-  gateway: { width: 188, height: 92 },
-  protocol: { width: 176, height: 76 },
-  pool: { width: 196, height: 94 },
-  provider: { width: 198, height: 82 },
+  gateway: { width: 188, height: 100 },
+  protocol: { width: 176, height: 80 },
+  pool: { width: 200, height: 90 },
+  provider: { width: 214, height: 78 },
   account: { width: 176, height: 62 },
 };
 

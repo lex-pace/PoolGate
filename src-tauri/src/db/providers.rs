@@ -62,7 +62,12 @@ impl Provider {
     }
 
     pub fn custom_header_pairs(&self) -> Result<Vec<(String, String)>, String> {
-        let Some(raw) = self.custom_headers.as_deref().map(str::trim).filter(|v| !v.is_empty()) else {
+        let Some(raw) = self
+            .custom_headers
+            .as_deref()
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+        else {
             return Ok(Vec::new());
         };
         let object = serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(raw)
@@ -282,7 +287,8 @@ mod tests {
     #[test]
     fn validates_custom_headers_and_blocks_security_headers() {
         let mut value = provider(None);
-        value.custom_headers = Some(r#"{"X-Title":"PoolGate","HTTP-Referer":"https://example.com"}"#.into());
+        value.custom_headers =
+            Some(r#"{"X-Title":"PoolGate","HTTP-Referer":"https://example.com"}"#.into());
         assert_eq!(value.custom_header_pairs().unwrap().len(), 2);
 
         value.custom_headers = Some(r#"{"Authorization":"Bearer override"}"#.into());

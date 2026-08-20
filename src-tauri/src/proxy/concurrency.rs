@@ -6,6 +6,65 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 pub const DEFAULT_ACCOUNT_CONCURRENCY: usize = 4;
 pub const DEFAULT_QUEUE_TIMEOUT: Duration = Duration::from_secs(15);
 
+/// Minimum spacing between upstream dispatches on one subscription (OAuth)
+/// account. Subscription backends flag machine-perfect cadences; a floor
+/// spacing keeps the request rate human-plausible.
+const SUBSCRIPTION_MIN_SPACING_MS: u64 = 200;
+/// Random jitter added to the spacing so the interval is never constant.
+const SUBSCRIPTION_JITTER_MS: u64 = 120;
+
+/// Whether an account's credential is a subscription/OAuth credential (as
+/// opposed to a metered API key). Only subscription accounts get behavioral
+/// throttling — API-key traffic is billed per token and needs no pacing.
+pub fn is_subscription_credential(credential_type: Option<&str>) -> bool {
+    matches!(
+        credential_type,
+        Some("oauth" | "token" | "codex_oauth" | "claude_oauth" | "gemini_oauth" | "grok_oauth" | "copilot_pat")
+    )
+}
+
+/// Per-account request pacing for subscription upstreams.
+///
+/// Unlike the semaphore (concurrency cap), this enforces a minimum spacing
+/// between request *starts* with random jitter, shaping the traffic into a
+/// human-like cadence that provider risk models tolerate.
+#[derive(Clone, Default)]
+pub struct AccountThrottle {
+    next_slot: Arc<Mutex<HashMap<String, std::time::Instant>>>,
+}
+
+impl AccountThrottle {
+    /// Wait until this account may dispatch its next upstream request.
+    /// `subscription` should come from [`is_subscription_credential`]; metered
+    /// API-key accounts pass through untouched.
+    pub async fn wait_turn(&self, account_id: &str, subscription: bool) {
+        if !subscription {
+            return;
+        }
+        let jitter = rand::random::<u64>() % SUBSCRIPTION_JITTER_MS;
+        let spacing = Duration::from_millis(SUBSCRIPTION_MIN_SPACING_MS + jitter);
+        let slot = {
+            let Ok(mut slots) = self.next_slot.lock() else {
+                return;
+            };
+            let now = std::time::Instant::now();
+            // Reserve the next free slot: at least `spacing` after the
+            // previous reservation (back-to-back dispatches queue up), or
+            // immediately when the account has been idle long enough.
+            let slot = slots
+                .get(account_id)
+                .copied()
+                .map_or(now, |previous| (previous + spacing).max(now));
+            slots.insert(account_id.to_string(), slot);
+            slot
+        };
+        let now = std::time::Instant::now();
+        if slot > now {
+            tokio::time::sleep(slot - now).await;
+        }
+    }
+}
+
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct AccountConcurrencySnapshot {
     pub limit: usize,
@@ -117,5 +176,38 @@ mod tests {
         assert!(gate.acquire("acct-b").await.is_ok());
         drop(permit);
         assert!(gate.acquire("acct-a").await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn throttle_paces_subscription_accounts_only() {
+        let throttle = AccountThrottle::default();
+        // API-key accounts pass through with no pacing at all.
+        throttle.wait_turn("acct-key", false).await;
+
+        // Two back-to-back subscription dispatches must be spaced apart
+        // (>= the minimum spacing). Allow generous slack for slow CI machines.
+        let start = std::time::Instant::now();
+        throttle.wait_turn("acct-oauth", true).await;
+        throttle.wait_turn("acct-oauth", true).await;
+        assert!(
+            start.elapsed() >= Duration::from_millis(SUBSCRIPTION_MIN_SPACING_MS),
+            "second dispatch must wait for the pacing slot"
+        );
+
+        // Different accounts are paced independently.
+        let start = std::time::Instant::now();
+        throttle.wait_turn("acct-oauth-2", true).await;
+        assert!(start.elapsed() < Duration::from_millis(SUBSCRIPTION_MIN_SPACING_MS));
+    }
+
+    #[test]
+    fn subscription_credential_classification() {
+        assert!(is_subscription_credential(Some("codex_oauth")));
+        assert!(is_subscription_credential(Some("claude_oauth")));
+        assert!(is_subscription_credential(Some("copilot_pat")));
+        assert!(is_subscription_credential(Some("oauth")));
+        assert!(!is_subscription_credential(Some("api_key")));
+        assert!(!is_subscription_credential(Some("upstream_key")));
+        assert!(!is_subscription_credential(None));
     }
 }

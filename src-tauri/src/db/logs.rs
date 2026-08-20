@@ -31,6 +31,10 @@ pub struct RequestLog {
     pub input_tokens: Option<i64>,
     pub output_tokens: Option<i64>,
     pub cache_tokens: Option<i64>,
+    /// Cache read/write split (canonical Usage caliber; Anthropic bills the
+    /// two at different rates). `cache_tokens` stays the derived sum.
+    pub cache_read_tokens: Option<i64>,
+    pub cache_write_tokens: Option<i64>,
     pub cost: Option<f64>,
     pub latency_ms: Option<i64>,
     pub ttft_ms: Option<i64>,
@@ -162,7 +166,8 @@ impl LogRepo {
              p.name, a.name, g.name, \
              l.model, l.endpoint, l.status, l.status_code, \
              l.input_tokens, l.output_tokens, l.cache_tokens, l.cost, l.latency_ms, l.ttft_ms, \
-             l.is_stream, l.error_message, l.request_at \
+             l.is_stream, l.error_message, l.request_at, \
+             l.cache_read_tokens, l.cache_write_tokens \
              FROM request_logs l \
              LEFT JOIN providers p ON p.id = l.provider_id \
              LEFT JOIN accounts a ON a.id = l.account_id \
@@ -272,9 +277,68 @@ impl LogRepo {
                 is_stream: row.get(22).map_err(|e| e.to_string())?,
                 error_message: row.get(23).map_err(|e| e.to_string())?,
                 request_at: row.get(24).map_err(|e| e.to_string())?,
+                cache_read_tokens: row.get(25).map_err(|e| e.to_string())?,
+                cache_write_tokens: row.get(26).map_err(|e| e.to_string())?,
             });
         }
         Ok(logs)
+    }
+
+    /// 按网关账号聚合的用量桶（额度卡 2×2 TOKEN 统计格数据源）。
+    ///
+    /// key = `request_logs.account_id`（accounts.id）。复用仪表盘「最终请求去重」口径
+    /// （ranked CTE：gateway 行优先 + attempt_count 降序 + id 降序），一次扫描同时
+    /// 产出今日/昨日/近7天/本月/累计 tokens 与最终请求数。
+    /// 返回 (account_id, today, yesterday, week, month, total, requests)。
+    pub fn account_token_buckets(
+        &self,
+        conn: &Mutex<Connection>,
+    ) -> Result<Vec<(String, i64, i64, i64, i64, i64, i64)>, String> {
+        let conn = conn.lock().map_err(|e| e.to_string())?;
+        let mut stmt = conn
+            .prepare(
+                "WITH ranked AS (
+                     SELECT account_id, request_at,
+                            COALESCE(input_tokens,0)+COALESCE(output_tokens,0)+COALESCE(cache_tokens,0) AS tok,
+                            ROW_NUMBER() OVER (
+                                PARTITION BY COALESCE(request_id, 'legacy:' || id)
+                                ORDER BY CASE WHEN source='gateway' THEN 1 ELSE 0 END DESC,
+                                         COALESCE(attempt_count, 1) DESC, id DESC
+                            ) AS request_rank
+                     FROM request_logs
+                     WHERE account_id IS NOT NULL AND account_id != ''
+                 )
+                 SELECT account_id,
+                        COALESCE(SUM(CASE WHEN datetime(request_at,'localtime') >= datetime('now','localtime','start of day')
+                                          THEN tok ELSE 0 END),0),
+                        COALESCE(SUM(CASE WHEN date(request_at,'localtime') = date('now','localtime','-1 day')
+                                          THEN tok ELSE 0 END),0),
+                        COALESCE(SUM(CASE WHEN datetime(request_at,'localtime') >= datetime('now','localtime','start of day','-6 days')
+                                          THEN tok ELSE 0 END),0),
+                        COALESCE(SUM(CASE WHEN datetime(request_at,'localtime') >= datetime('now','localtime','start of month')
+                                          THEN tok ELSE 0 END),0),
+                        COALESCE(SUM(tok),0),
+                        COUNT(*)
+                 FROM ranked WHERE request_rank=1
+                 GROUP BY account_id",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, i64>(4)?,
+                    row.get::<_, i64>(5)?,
+                    row.get::<_, i64>(6)?,
+                ))
+            })
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+        Ok(rows)
     }
 
     /// Aggregate tokens for the selected tray-menu range. Request timestamps
@@ -802,7 +866,8 @@ impl LogRepo {
         end_date: Option<&str>,
     ) -> Result<serde_json::Value, String> {
         // Default: last 7 days
-        let default_start = chrono::Utc::now().checked_sub_signed(chrono::Duration::days(7))
+        let default_start = chrono::Utc::now()
+            .checked_sub_signed(chrono::Duration::days(7))
             .map(|d| d.format("%Y-%m-%d").to_string())
             .unwrap_or_else(|| "2020-01-01".to_string());
         let default_end = chrono::Utc::now().format("%Y-%m-%d").to_string();
@@ -848,18 +913,24 @@ impl LogRepo {
         );
         let start_param = start_sql.clone();
         let end_param = end_sql.clone();
-        let summary: serde_json::Value = conn.query_row(&summary_sql, rusqlite::params![start_param, end_param], |row| {
-            Ok(serde_json::json!({
-                "total_requests": row.get::<_, i64>(0)?,
-                "success_count": row.get::<_, i64>(1)?,
-                "error_count": row.get::<_, i64>(2)?,
-                "total_tokens": row.get::<_, i64>(3)?,
-                "total_input_tokens": row.get::<_, i64>(4)?,
-                "total_output_tokens": row.get::<_, i64>(5)?,
-                "total_cost": row.get::<_, f64>(6)?,
-                "avg_latency_ms": row.get::<_, f64>(7)?,
-            }))
-        }).map_err(|e| e.to_string())?;
+        let summary: serde_json::Value = conn
+            .query_row(
+                &summary_sql,
+                rusqlite::params![start_param, end_param],
+                |row| {
+                    Ok(serde_json::json!({
+                        "total_requests": row.get::<_, i64>(0)?,
+                        "success_count": row.get::<_, i64>(1)?,
+                        "error_count": row.get::<_, i64>(2)?,
+                        "total_tokens": row.get::<_, i64>(3)?,
+                        "total_input_tokens": row.get::<_, i64>(4)?,
+                        "total_output_tokens": row.get::<_, i64>(5)?,
+                        "total_cost": row.get::<_, f64>(6)?,
+                        "avg_latency_ms": row.get::<_, f64>(7)?,
+                    }))
+                },
+            )
+            .map_err(|e| e.to_string())?;
 
         let daily_sql = format!(
             "{ranked_cte}
@@ -977,6 +1048,10 @@ mod tests {
             "../../migrations/010_route_pool_management.sql"
         ))
         .expect("migrate route pool management");
+        conn.execute_batch(include_str!(
+            "../../migrations/021_request_log_cache_split.sql"
+        ))
+        .expect("migrate cache split");
         Mutex::new(conn)
     }
 
@@ -995,7 +1070,9 @@ mod tests {
         .expect("insert logs");
         drop(conn);
 
-        let series = LogRepo.get_daily_token_series(&db).expect("daily token series");
+        let series = LogRepo
+            .get_daily_token_series(&db)
+            .expect("daily token series");
         // Spans the earliest log (2 days ago) through today, padded to 3 days.
         assert_eq!(series.len(), 3);
         let today = series.last().expect("today");
@@ -1005,7 +1082,9 @@ mod tests {
         assert_eq!(two_days_ago.tokens, 155);
         assert_eq!(two_days_ago.requests, 1);
         // Zero-activity days are present and padded to zero.
-        assert!(series.iter().any(|point| point.tokens == 0 && point.requests == 0));
+        assert!(series
+            .iter()
+            .any(|point| point.tokens == 0 && point.requests == 0));
     }
 
     #[test]
@@ -1040,6 +1119,53 @@ mod tests {
             .expect("30 day tokens");
         assert_eq!(thirty_days.total_tokens, 22);
         assert!(LogRepo.get_token_range_stats(&db, "invalid").is_err());
+    }
+
+    #[test]
+    fn account_token_buckets_split_by_calendar_windows_and_dedupe_final_row() {
+        let db = test_db();
+        let conn = db.lock().expect("lock database");
+        conn.execute_batch(
+            "INSERT INTO request_logs
+                (account_id, request_id, attempt_count, source, status, input_tokens, output_tokens, cache_tokens, request_at)
+             VALUES
+                ('acc-1', 'r1', 1, 'proxy', 'error', 99, 0, 0, datetime('now')),
+                ('acc-1', 'r1', 2, 'proxy', 'success', 12, 8, 2, datetime('now')),
+                ('acc-1', 'r2', 1, 'proxy', 'success', 100, 50, 5, datetime('now', '-1 day')),
+                ('acc-1', 'r3', 1, 'proxy', 'success', 40, 10, 0, datetime('now', '-8 days')),
+                ('acc-2', 'r4', 1, 'proxy', 'success', 10, 5, 1, datetime('now', '-40 days')),
+                (NULL,    'r5', 1, 'proxy', 'success', 999, 999, 999, datetime('now'));",
+        )
+        .expect("insert logs");
+        drop(conn);
+
+        let buckets = LogRepo
+            .account_token_buckets(&db)
+            .expect("account token buckets");
+        assert_eq!(buckets.len(), 2, "NULL account_id excluded");
+        let acc1 = buckets
+            .iter()
+            .find(|(id, ..)| id == "acc-1")
+            .expect("acc-1 present");
+        // 今日 22（最终行 12+8+2），昨日 155，近7天 22+155=177
+        assert_eq!(acc1.1, 22);
+        assert_eq!(acc1.2, 155);
+        assert_eq!(acc1.3, 177);
+        // 本月含 -8 天的 r3(50)：跨月则本月=177，同月则本月=227（日期无关断言）
+        assert!(acc1.4 == 177 || acc1.4 == 227);
+        // 累计恒为 22 + 155 + 50 = 227
+        assert_eq!(acc1.5, 227);
+        assert_eq!(acc1.6, 3);
+        let acc2 = buckets
+            .iter()
+            .find(|(id, ..)| id == "acc-2")
+            .expect("acc-2 present");
+        assert_eq!(acc2.1, 0);
+        assert_eq!(acc2.2, 0);
+        assert_eq!(acc2.3, 0);
+        assert_eq!(acc2.4, 0); // -40 天不在本月
+        assert_eq!(acc2.5, 16);
+        assert_eq!(acc2.6, 1);
     }
 
     #[test]
@@ -1198,10 +1324,18 @@ mod status_filter_query {
             .expect("migrate base");
         conn.execute_batch(include_str!("../../migrations/008_client_keys.sql"))
             .expect("migrate client keys");
-        conn.execute_batch(include_str!("../../migrations/009_request_logs_client_key.sql"))
-            .expect("migrate client key audit");
-        conn.execute_batch(include_str!("../../migrations/010_route_pool_management.sql"))
-            .expect("migrate route pool management");
+        conn.execute_batch(include_str!(
+            "../../migrations/009_request_logs_client_key.sql"
+        ))
+        .expect("migrate client key audit");
+        conn.execute_batch(include_str!(
+            "../../migrations/010_route_pool_management.sql"
+        ))
+        .expect("migrate route pool management");
+        conn.execute_batch(include_str!(
+            "../../migrations/021_request_log_cache_split.sql"
+        ))
+        .expect("migrate cache split");
         conn.execute_batch(
             "INSERT INTO request_logs (request_id, attempt_count, source, status, status_code, request_at)
              VALUES

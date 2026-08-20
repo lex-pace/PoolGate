@@ -3,11 +3,16 @@ import { Card, CTitle, CBody } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Spinner } from "@/components/ui/Spinner";
-import { useProxyStatus, useGatewaySettings, useSetGatewayAccessKey, useSetCloseButtonBehavior } from "@/hooks/use-tauri";
+import { useProxyStatus, useGatewaySettings, useSetGatewayAccessKey, useSetCloseButtonBehavior, useSetListenAddr, useLanAddresses, useMenuBarMainText, useSetMenuBarMainText } from "@/hooks/use-tauri";
+import { useTheme } from "@/components/ui/ThemeProvider";
+import { useGlassSettings } from "@/components/ui/GlassSettings";
+import { useAccountDisplay } from "@/components/ui/AccountDisplay";
 import { useToast } from "@/components/ui/Toast";
+import { ModeSettings } from "@/components/AppMode";
 import {
-  Settings as SettingsIcon, Server, FileText, Wrench, Info, Terminal,
-  Copy, Check, ExternalLink, KeyRound, Eye, EyeOff,
+  Settings as SettingsIcon, Server, FileText, Wrench, Info, Terminal, Layers3, Activity,
+  Copy, Check, ExternalLink, KeyRound, Eye, EyeOff, Globe, Network, ShieldAlert,
+  Archive, LogOut, Monitor, Sun, Moon,
 } from "lucide-react";
 
 const shortcuts = [
@@ -26,16 +31,36 @@ const settingsTabs = [
   { id: "about", label: "关于", icon: Info },
 ];
 
-const toolConfigs = [
+const choiceIcons: Record<string, React.ElementType> = {
+  hide: Archive,
+  quit: LogOut,
+  system: Monitor,
+  light: Sun,
+  dark: Moon,
+  tokens: Activity,
+  top1_tool: Wrench,
+  top1_model: Layers3,
+  mask: EyeOff,
+  full: Eye,
+  localhost: Globe,
+  lan: Network,
+};
+
+function ChoiceIcon({ kind }: { kind: string }) {
+  const Icon = choiceIcons[kind] ?? SettingsIcon;
+  return <Icon size={16} strokeWidth={1.8} aria-hidden="true" />;
+}
+
+const buildToolConfigs = (endpoint: string) => [
   {
     name: "Claude Code",
     description: "ANTHROPIC_BASE_URL 环境变量",
-    config: "export ANTHROPIC_BASE_URL=http://127.0.0.1:9800",
+    config: `export ANTHROPIC_BASE_URL=${endpoint}`,
   },
   {
     name: "Codex CLI",
     description: "OPENAI_BASE_URL 环境变量",
-    config: "export OPENAI_BASE_URL=http://127.0.0.1:9800",
+    config: `export OPENAI_BASE_URL=${endpoint}`,
   },
   {
     name: "OpenCode",
@@ -43,7 +68,7 @@ const toolConfigs = [
     config: `{
   "providers": {
     "default": {
-      "baseURL": "http://127.0.0.1:9800"
+      "baseURL": "${endpoint}"
     }
   }
 }`,
@@ -55,7 +80,18 @@ export default function Settings() {
   const { data: gateway } = useGatewaySettings();
   const setAccessKey = useSetGatewayAccessKey();
   const setCloseButtonBehavior = useSetCloseButtonBehavior();
+  const setListenAddr = useSetListenAddr();
+  const { data: lanAddresses, isLoading: lanLoading } = useLanAddresses();
+  const { preference: themePreference, setPreference: setThemePreference } = useTheme();
+  const { glassOpacity, glassBlur, chromeFollows, setGlassSettings, setChromeFollows, resetGlassSettings } = useGlassSettings();
+  const { mode: accountDisplayMode, setMode: setAccountDisplayMode } = useAccountDisplay();
+  const { data: menuBarMainText } = useMenuBarMainText();
+  const setMenuBarMainText = useSetMenuBarMainText();
   const { toast } = useToast();
+
+  const handleGlassChange = (opacity: number, blur: number) => {
+    setGlassSettings(opacity, blur);
+  };
   const [activeTab, setActiveTab] = useState("general");
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
   const [keyInput, setKeyInput] = useState("");
@@ -71,7 +107,11 @@ export default function Settings() {
     );
   }
 
-  const endpoint = `http://127.0.0.1:${proxy?.port || 9800}`;
+  const isLan = gateway?.listen_addr === "lan";
+  const lanHost = isLan && lanAddresses && lanAddresses.length > 0 ? lanAddresses[0] : null;
+  const serviceHost = isLan ? (lanHost || "127.0.0.1") : "127.0.0.1";
+  const endpoint = `http://${serviceHost}:${proxy?.port || 9800}`;
+  const toolConfigs = buildToolConfigs(endpoint);
 
   const handleCopy = async (config: string, index: number) => {
     await navigator.clipboard.writeText(config);
@@ -102,6 +142,15 @@ export default function Settings() {
     }
   };
 
+  const handleListenAddrChange = async (mode: "localhost" | "lan") => {
+    try {
+      await setListenAddr.mutateAsync(mode);
+      toast("success", mode === "lan" ? "已切换为局域网监听（若网关运行中已自动重启）" : "已切回仅本机监听（若网关运行中已自动重启）");
+    } catch (e) {
+      toast("error", `切换失败: ${String(e)}`);
+    }
+  };
+
   const handleCloseBehaviorChange = async (behavior: string) => {
     try {
       await setCloseButtonBehavior.mutateAsync(behavior);
@@ -112,26 +161,24 @@ export default function Settings() {
   };
 
   return (
-    <div className="space-y-5 animate-fade-in max-w-4xl pg-page">
-      <div className="pg-page-header">
+    <div className="space-y-5 animate-fade-in max-w-4xl pg-page pg-settings-page">
+      <div className="pg-page-header pg-settings-page-header">
         <div className="pg-eyebrow mb-1">System Configuration</div>
         <h2 style={{ color: "var(--text-primary)" }}>系统设置</h2>
         <p className="text-xs mt-0.5" style={{ color: "var(--text-dim)" }}>PoolGate 代理服务状态与系统信息</p>
       </div>
 
       {/* Tab navigation */}
-      <div className="flex items-center gap-1 p-1 rounded-lg" style={{ backgroundColor: "var(--bg-elevated)" }}>
+      <div className="pg-settings-tabs" role="tablist" aria-label="设置分类">
         {settingsTabs.map((tab) => {
           const Icon = tab.icon;
           return (
             <button
               key={tab.id}
               onClick={() => setActiveTab(tab.id)}
-              className={`flex items-center gap-2 px-3 py-2 text-sm rounded-md transition-all duration-150 cursor-pointer flex-1 justify-center ${
-                activeTab === tab.id
-                  ? "bg-[var(--bg-surface)] text-[var(--color-brand)] font-medium shadow-sm"
-                  : "text-[var(--text-dim)] hover:text-[var(--text-secondary)]"
-              }`}
+              role="tab"
+              aria-selected={activeTab === tab.id}
+              className={`pg-settings-tab ${activeTab === tab.id ? "pg-settings-tab-active" : "pg-settings-tab-idle"}`}
             >
               <Icon size={14} />
               <span className="hidden sm:inline">{tab.label}</span>
@@ -142,25 +189,42 @@ export default function Settings() {
 
       {/* General Tab */}
       {activeTab === "general" && (
-        <Card>
-          <CTitle>通用设置</CTitle>
-          <CBody className="space-y-4 mt-2">
-            <div className="grid grid-cols-2 gap-4 text-sm">
+        <>
+        <Card className="pg-settings-mode-card">
+          <CTitle>产品模式</CTitle>
+          <CBody className="mt-2">
+            <ModeSettings />
+          </CBody>
+        </Card>
+        <Card className="pg-settings-general-card">
+          <div className="pg-settings-card-heading">
+            <div className="pg-settings-card-heading-main">
+              <span className="pg-settings-card-icon"><SettingsIcon size={16} /></span>
               <div>
+                <div className="pg-settings-card-eyebrow">PREFERENCES</div>
+                <h3>通用设置</h3>
+                <p>控制 PoolGate 的外观、行为与菜单栏信息</p>
+              </div>
+            </div>
+            <span className="pg-settings-live"><i /> 实时生效</span>
+          </div>
+          <CBody className="space-y-4 mt-2 pg-settings-body">
+            <div className="grid grid-cols-2 gap-4 text-sm pg-settings-grid">
+              <div className="pg-settings-summary">
                 <div className="text-xs" style={{ color: "var(--text-dim)" }}>代理端口</div>
                 <div className="mt-1 font-mono" style={{ color: "var(--text-primary)" }}>{proxy?.port || 9800}</div>
                 <div className="text-xs mt-0.5" style={{ color: "var(--text-dim)" }}>修改后需重启</div>
               </div>
-              <div>
+              <div className="pg-settings-summary">
                 <div className="text-xs" style={{ color: "var(--text-dim)" }}>开机自启</div>
                 <div className="mt-1">
                   <Badge variant="ok" dot>已启用</Badge>
                 </div>
               </div>
-              <div className="col-span-2">
+              <div className="col-span-2 pg-settings-section">
                 <div className="text-xs" style={{ color: "var(--text-dim)" }}>关闭按钮行为</div>
                 <div className="mt-2 flex items-center gap-3">
-                  <label className="flex items-center gap-2 cursor-pointer">
+                  <label className="pg-radio-option" data-choice="hide">
                     <input
                       type="radio"
                       name="closeBehavior"
@@ -169,9 +233,10 @@ export default function Settings() {
                       onChange={() => handleCloseBehaviorChange("hide")}
                       className="w-4 h-4"
                     />
+                    <ChoiceIcon kind="hide" />
                     <span className="text-sm" style={{ color: "var(--text-primary)" }}>隐藏到托盘</span>
                   </label>
-                  <label className="flex items-center gap-2 cursor-pointer">
+                  <label className="pg-radio-option" data-choice="quit">
                     <input
                       type="radio"
                       name="closeBehavior"
@@ -180,6 +245,7 @@ export default function Settings() {
                       onChange={() => handleCloseBehaviorChange("quit")}
                       className="w-4 h-4"
                     />
+                    <ChoiceIcon kind="quit" />
                     <span className="text-sm" style={{ color: "var(--text-primary)" }}>退出程序</span>
                   </label>
                 </div>
@@ -187,9 +253,143 @@ export default function Settings() {
                   选择点击窗口关闭按钮时的行为
                 </div>
               </div>
+              <div className="pg-settings-section">
+                <div className="text-xs" style={{ color: "var(--text-dim)" }}>界面主题（含托盘）</div>
+                <div className="mt-2 flex items-center gap-3">
+                  {(["system", "light", "dark"] as const).map((option) => (
+                    <label key={option} className="pg-radio-option" data-choice={option}>
+                      <input
+                        type="radio"
+                        name="themePreference"
+                        value={option}
+                        checked={themePreference === option}
+                        onChange={() => { setThemePreference(option); toast("success", `主题已切换为「${option === "system" ? "随系统" : option === "light" ? "浅色" : "深色"}」`); }}
+                        className="w-4 h-4"
+                      />
+                      <ChoiceIcon kind={option} />
+                      <span className="text-sm" style={{ color: "var(--text-primary)" }}>
+                        {option === "system" ? "随系统" : option === "light" ? "浅色" : "深色"}
+                      </span>
+                    </label>
+                  ))}
+                </div>
+                <div className="text-xs mt-1" style={{ color: "var(--text-dim)" }}>
+                  应用于主界面与托盘卡片，保存后立即生效
+                </div>
+              </div>
+              <div className="col-span-2 pg-settings-section">
+                <div className="text-xs" style={{ color: "var(--text-dim)" }}>菜单栏主文本（macOS 菜单栏 / Windows 托盘）</div>
+                <div className="mt-2 flex items-center gap-3">
+                  {([["tokens", "今日 Tokens"], ["top1_tool", "Top1 工具"], ["top1_model", "Top1 模型"]] as const).map(([value, label]) => (
+                    <label key={value} className="pg-radio-option" data-choice={value}>
+                      <input
+                        type="radio"
+                        name="menuBarMainText"
+                        value={value}
+                        checked={(menuBarMainText ?? "tokens") === value}
+                        onChange={() => {
+                          setMenuBarMainText.mutate(value, {
+                            onSuccess: () => toast("success", `菜单栏主文本已切换为「${label}」`),
+                            onError: (e) => toast("error", `设置失败: ${String(e)}`),
+                          });
+                        }}
+                        className="w-4 h-4"
+                      />
+                      <ChoiceIcon kind={value} />
+                      <span className="text-sm" style={{ color: "var(--text-primary)" }}>{label}</span>
+                    </label>
+                  ))}
+                </div>
+                <div className="text-xs mt-1" style={{ color: "var(--text-dim)" }}>
+                  选择菜单栏主文本，带含义标签：今日（今日 Tokens，如「今日 240K」）/ 工具（今日用量第一的工具，如「工具 Claude Code」）/ 模型（今日用量第一的模型，如「模型 claude-sonnet-4…」，超长自动截断）。三选一固定展示、不轮播。菜单栏为单一图标（Logo + 状态点 + 主文本），状态点按综合状态着色：绿=正常、蓝=流量活跃、橙=额度告警、红=离线；额度剩余百分比与完整信息（状态 · 今日 Tokens · Top1 工具/模型）显示在鼠标悬浮提示中，保存后立即生效
+                </div>
+              </div>
+              <div className="col-span-2 pg-settings-section">
+                <div className="text-xs" style={{ color: "var(--text-dim)" }}>账号身份展示（桌面端 + 托盘）</div>
+                <div className="mt-2 flex items-center gap-3">
+                  {([["mask", "脱密显示"], ["full", "完整显示"]] as const).map(([value, label]) => (
+                    <label key={value} className="pg-radio-option" data-choice={value}>
+                      <input
+                        type="radio"
+                        name="accountDisplay"
+                        value={value}
+                        checked={accountDisplayMode === value}
+                        onChange={() => { setAccountDisplayMode(value); toast("success", `账号已切换为「${label}」`); }}
+                        className="w-4 h-4"
+                      />
+                      <ChoiceIcon kind={value} />
+                      <span className="text-sm" style={{ color: "var(--text-primary)" }}>{label}</span>
+                    </label>
+                  ))}
+                </div>
+                <div className="text-xs mt-1" style={{ color: "var(--text-dim)" }}>
+                  脱密显示只展示掩码身份（u***@example.com）；完整显示按原样展示账号名称与邮箱，立即生效
+                </div>
+              </div>
+              <div className="col-span-2 pg-settings-section pg-settings-glass-section">
+                <div className="text-xs" style={{ color: "var(--text-dim)" }}>玻璃效果（托盘 / 侧栏工具栏 / Token 仪表盘卡片）</div>
+                <div className="mt-2 space-y-2.5">
+                  <div className="flex items-center gap-3">
+                    <span className="w-16 shrink-0 text-xs" style={{ color: "var(--text-primary)" }}>不透明度</span>
+                    <input
+                      type="range"
+                      min={0}
+                      max={100}
+                      value={glassOpacity}
+                      style={{ background: `linear-gradient(to right, var(--color-brand) ${glassOpacity}%, var(--bg-elevated) ${glassOpacity}%)` }}
+                      onChange={(e) => handleGlassChange(Number(e.target.value), glassBlur)}
+                      className="flex-1 accent-[var(--color-brand)]"
+                    />
+                    <span className="w-10 shrink-0 text-right font-mono text-xs" style={{ color: "var(--text-dim)" }}>{glassOpacity}%</span>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <span className="w-16 shrink-0 text-xs" style={{ color: "var(--text-primary)" }}>模糊</span>
+                    <input
+                      type="range"
+                      min={0}
+                      max={100}
+                      value={glassBlur}
+                      style={{ background: `linear-gradient(to right, var(--color-brand) ${glassBlur}%, var(--bg-elevated) ${glassBlur}%)` }}
+                      onChange={(e) => handleGlassChange(glassOpacity, Number(e.target.value))}
+                      className="flex-1 accent-[var(--color-brand)]"
+                    />
+                    <span className="w-10 shrink-0 text-right font-mono text-xs" style={{ color: "var(--text-dim)" }}>{glassBlur}px</span>
+                  </div>
+                  <div className="flex items-center gap-2.5">
+                    <input
+                      type="checkbox"
+                      id="glassChromeFollows"
+                      checked={chromeFollows}
+                      onChange={(e) => {
+                        setChromeFollows(e.target.checked);
+                        toast("success", `主窗口侧栏/工具栏${e.target.checked ? "已跟随玻璃滑块" : "已恢复固定透明度"}`);
+                      }}
+                      className="pg-settings-checkbox"
+                    />
+                    <label htmlFor="glassChromeFollows" className="text-xs cursor-pointer" style={{ color: "var(--text-primary)" }}>
+                      主窗口侧栏/工具栏跟随玻璃滑块
+                    </label>
+                    <span className="text-xs" style={{ color: "var(--text-dim)" }}>（默认开启：托盘与桌面端统一使用玻璃参数）</span>
+                  </div>
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-xs" style={{ color: "var(--text-dim)" }}>
+                      作用于托盘外壳、主窗口侧栏/工具栏与各页卡片（Token 仪表盘 / 指挥中心 / 供应商 / 日志 / 分析）的透明度与毛玻璃模糊；浅色与深色均采用低透明度 Liquid Glass，默认透明度 32%、模糊 64px；默认全局联动，取消勾选后侧栏/工具栏使用固定透明度
+                    </span>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="shrink-0"
+                      onClick={() => { resetGlassSettings(); toast("success", "已恢复默认玻璃效果"); }}
+                    >
+                      恢复默认
+                    </Button>
+                  </div>
+                </div>
+              </div>
             </div>
           </CBody>
         </Card>
+        </>
       )}
 
       {/* Proxy Tab */}
@@ -221,6 +421,87 @@ export default function Settings() {
                   </Button>
                 </div>
               </div>
+            </div>
+
+            {/* Listen address */}
+            <div className="pt-4 mt-2 border-t" style={{ borderColor: "var(--border-subtle)" }}>
+              <div className="flex items-center gap-2 mb-1">
+                <Globe size={14} style={{ color: "var(--text-dim)" }} />
+                <div className="text-sm font-medium" style={{ color: "var(--text-primary)" }}>监听地址</div>
+                <Badge variant={isLan ? "warn" : "ok"} dot>
+                  {isLan ? "局域网" : "仅本机"}
+                </Badge>
+              </div>
+              <div className="mt-2 flex items-center gap-3">
+                <label className="pg-radio-option" data-choice="localhost">
+                  <input
+                    type="radio"
+                    name="listenAddr"
+                    value="localhost"
+                    checked={!isLan}
+                    onChange={() => handleListenAddrChange("localhost")}
+                    className="w-4 h-4"
+                  />
+                  <ChoiceIcon kind="localhost" />
+                  <span className="text-sm" style={{ color: "var(--text-primary)" }}>仅本机</span>
+                </label>
+                <label className="pg-radio-option" data-choice="lan">
+                  <input
+                    type="radio"
+                    name="listenAddr"
+                    value="lan"
+                    checked={isLan}
+                    onChange={() => handleListenAddrChange("lan")}
+                    className="w-4 h-4"
+                  />
+                  <ChoiceIcon kind="lan" />
+                  <span className="text-sm" style={{ color: "var(--text-primary)" }}>局域网共享</span>
+                </label>
+              </div>
+              <p className="text-xs mt-1" style={{ color: "var(--text-dim)" }}>
+                仅本机：网关只监听 127.0.0.1，仅本机可访问（个人使用默认）。局域网共享：网关监听 0.0.0.0，同一网络内的同事可访问，切换后立即生效（若网关运行中会自动重启）。
+              </p>
+              {isLan && (
+                <div className="mt-3 p-3 rounded-md border" style={{ backgroundColor: "var(--bg-elevated)", borderColor: "var(--border-subtle)" }}>
+                  {gateway?.access_key_set ? (
+                    <>
+                      <div className="flex items-center gap-2 mb-2">
+                        <Network size={13} style={{ color: "var(--color-ok)" }} />
+                        <span className="text-xs font-medium" style={{ color: "var(--text-primary)" }}>同事访问地址</span>
+                      </div>
+                      {lanLoading ? (
+                        <span className="text-xs" style={{ color: "var(--text-dim)" }}>正在探测局域网地址...</span>
+                      ) : lanAddresses && lanAddresses.length > 0 ? (
+                        <div className="space-y-1.5">
+                          {lanAddresses.map((ip) => {
+                            const url = `http://${ip}:${proxy?.port || 9800}`;
+                            return (
+                              <div key={ip} className="flex items-center gap-2">
+                                <span className="font-mono text-xs" style={{ color: "var(--text-primary)" }}>{url}</span>
+                                <Button size="sm" variant="ghost" onClick={() => { navigator.clipboard.writeText(url); toast("success", "已复制"); }}>
+                                  <Copy size={12} />
+                                </Button>
+                              </div>
+                            );
+                          })}
+                          <p className="text-xs mt-1" style={{ color: "var(--text-dim)" }}>
+                            让同事在各自的 Agent 工具里把 Base URL 指向上面的地址，并携带网关访问密钥（<span className="font-mono">Authorization: Bearer</span>）。
+                          </p>
+                        </div>
+                      ) : (
+                        <p className="text-xs" style={{ color: "var(--text-dim)" }}>未检测到局域网地址，请确认已连接到网络。</p>
+                      )}
+                    </>
+                  ) : (
+                    <div className="flex items-start gap-2">
+                      <ShieldAlert size={14} className="mt-0.5 shrink-0" style={{ color: "var(--color-warn)" }} />
+                      <p className="text-xs" style={{ color: "var(--text-secondary)" }}>
+                        局域网共享必须先设置<span className="font-medium">网关访问密钥</span>，否则局域网内任何设备都能无鉴权调用网关。请先在下方保存访问密钥后再切换。
+                      </p>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
 
             {/* Gateway access key */}

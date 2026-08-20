@@ -1,0 +1,3 @@
+{"type":"user","message":{"role":"user","content":"[REDACTED PROMPT]"},"timestamp":"2026-08-08T09:00:00.000Z"}
+{"type":"assistant","message":{"role":"assistant","content":"[REDACTED RESPONSE]","model":"claude-3-5-sonnet-20241022","usage":{"input_tokens":100,"output_tokens":50,"cache_read_input_tokens":50,"cache_creation_input_tokens":0}},"timestamp":"2026-08-08T09:00:02.000Z"}
+{"type":"assistant","message":{"role":"assistant","content":"[REDACTED RESPONSE]","model":"claude-3-5-sonnet-20241022","usage":{"input_tokens":60,"output_tokens":30,"cache_read_input_tokens":90,"cache_creation_input_tokens":0}},"timestamp":"2026-08-08T09:00:04.000Z"}

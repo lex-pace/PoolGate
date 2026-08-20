@@ -68,7 +68,11 @@ pub async fn request_context(account: &Account) -> Result<GrokRequestContext, St
     if let Some(ref expires_at) = payload.expires_at {
         if let Ok(expiry) = expires_at.parse::<DateTime<Utc>>() {
             if expiry > refresh_deadline {
-                if let Some(access_token) = payload.access_token.clone().filter(|t| !t.trim().is_empty()) {
+                if let Some(access_token) = payload
+                    .access_token
+                    .clone()
+                    .filter(|t| !t.trim().is_empty())
+                {
                     return Ok(GrokRequestContext { access_token });
                 }
             }
@@ -113,7 +117,10 @@ pub fn apply_chat_headers(request: RequestBuilder, context: &GrokRequestContext)
         .header("User-Agent", "PoolGate/1.0")
 }
 
-pub fn apply_responses_headers(request: RequestBuilder, context: &GrokRequestContext) -> RequestBuilder {
+pub fn apply_responses_headers(
+    request: RequestBuilder,
+    context: &GrokRequestContext,
+) -> RequestBuilder {
     request
         .bearer_auth(&context.access_token)
         .header("Content-Type", "application/json")
@@ -121,7 +128,10 @@ pub fn apply_responses_headers(request: RequestBuilder, context: &GrokRequestCon
         .header("User-Agent", "PoolGate/1.0")
 }
 
-pub fn apply_health_headers(request: RequestBuilder, context: &GrokRequestContext) -> RequestBuilder {
+pub fn apply_health_headers(
+    request: RequestBuilder,
+    context: &GrokRequestContext,
+) -> RequestBuilder {
     request
         .bearer_auth(&context.access_token)
         .header("Accept", "application/json")
@@ -166,7 +176,9 @@ pub async fn check_grok_health(account: &Account) -> crate::services::health_che
         Ok(Ok(resp)) => {
             let latency = start.elapsed().as_millis() as u64;
             if resp.status().is_success() {
-                HealthResult::Passed { latency_ms: latency }
+                HealthResult::Passed {
+                    latency_ms: latency,
+                }
             } else {
                 let code = resp.status().as_u16();
                 let body = resp.text().await.unwrap_or_default();
@@ -252,8 +264,8 @@ pub async fn refresh_after_unauthorized(
         ));
     }
 
-    let json: Value =
-        serde_json::from_str(&body).map_err(|error| format!("Invalid refresh response: {}", error))?;
+    let json: Value = serde_json::from_str(&body)
+        .map_err(|error| format!("Invalid refresh response: {}", error))?;
 
     let new_access_token = json["access_token"]
         .as_str()
@@ -266,8 +278,7 @@ pub async fn refresh_after_unauthorized(
         .or(payload.refresh_token.clone());
 
     let expires_in = json["expires_in"].as_i64().unwrap_or(3600);
-    let new_expires_at =
-        (Utc::now() + chrono::Duration::seconds(expires_in)).to_rfc3339();
+    let new_expires_at = (Utc::now() + chrono::Duration::seconds(expires_in)).to_rfc3339();
 
     // Persist.
     let mut new_payload = payload;
@@ -281,7 +292,10 @@ pub async fn refresh_after_unauthorized(
     updated.credential_data = Some(credential_data);
     updated.expires_at = Some(new_expires_at);
     state.db.accounts.update(&state.db.conn, &updated)?;
-    state.db.accounts.mark_token_refreshed(&state.db.conn, account_id)?;
+    state
+        .db
+        .accounts
+        .mark_token_refreshed(&state.db.conn, account_id)?;
 
     state
         .db

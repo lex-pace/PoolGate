@@ -33,6 +33,10 @@ pub struct LogEvent {
     pub input_tokens: Option<i64>,
     pub output_tokens: Option<i64>,
     pub cache_tokens: Option<i64>,
+    /// Cache read/write split (Anthropic bills them at different rates).
+    /// `cache_tokens` stays the derived sum for backward compatibility.
+    pub cache_read_tokens: Option<i64>,
+    pub cache_write_tokens: Option<i64>,
     pub cost: Option<f64>,
     pub latency_ms: Option<i64>,
     pub ttft_ms: Option<i64>,
@@ -105,8 +109,10 @@ fn flush_batch(events: &[LogEvent], state: &Arc<AppState>) {
         let sql = "INSERT INTO request_logs \
             (group_id, client_key_id, request_id, attempt_count, usage_available, source, \
              provider_id, account_id, model, endpoint, status, status_code, input_tokens, \
-             output_tokens, cache_tokens, cost, latency_ms, ttft_ms, is_stream, error_message, request_at) \
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)";
+             output_tokens, cache_tokens, cache_read_tokens, cache_write_tokens, cost, \
+             latency_ms, ttft_ms, is_stream, error_message, request_at) \
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, \
+             ?17, ?18, ?19, ?20, ?21, ?22, ?23)";
 
         if let Err(e) = conn.execute(
             sql,
@@ -126,6 +132,8 @@ fn flush_batch(events: &[LogEvent], state: &Arc<AppState>) {
                 event.input_tokens,
                 event.output_tokens,
                 event.cache_tokens,
+                event.cache_read_tokens,
+                event.cache_write_tokens,
                 event.cost,
                 event.latency_ms,
                 event.ttft_ms,
@@ -161,6 +169,8 @@ impl LogEvent {
             input_tokens: log.input_tokens,
             output_tokens: log.output_tokens,
             cache_tokens: log.cache_tokens,
+            cache_read_tokens: log.cache_read_tokens,
+            cache_write_tokens: log.cache_write_tokens,
             cost: log.cost,
             latency_ms: log.latency_ms,
             ttft_ms: log.ttft_ms,

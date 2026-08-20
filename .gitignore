@@ -1,5 +1,9 @@
 # Dependencies
 node_modules/
+package-lock.json
+
+# Local agent/tool metadata
+.zcode/
 
 # Build output
 dist/

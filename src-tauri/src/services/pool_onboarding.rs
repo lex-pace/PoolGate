@@ -61,7 +61,8 @@ pub fn ensure_account_in_pool(
                 model: model.clone(),
             })
             .collect();
-        db.groups.add_model_resources(&db.conn, &pool_id, &resources)?;
+        db.groups
+            .add_model_resources(&db.conn, &pool_id, &resources)?;
     }
 
     tracing::info!(

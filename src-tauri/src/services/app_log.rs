@@ -81,12 +81,16 @@ static SANITIZE_PATTERNS: LazyLock<Vec<(Regex, &'static str)>> = LazyLock::new(|
     vec![
         // x-api-key / Authorization / api_key style headers.
         (
-            Regex::new(r"(?i)(x-api-key|authorization|api[_-]?key)\s*[:=]\s*\S+(?:\s+\S+)*").unwrap(),
+            Regex::new(r"(?i)(x-api-key|authorization|api[_-]?key)\s*[:=]\s*\S+(?:\s+\S+)*")
+                .unwrap(),
             "$1: ***",
         ),
         // Standalone Bearer tokens (8+ chars after the keyword) — catches
         // tokens not already covered by the Authorization header pattern.
-        (Regex::new(r"(Bearer\s+)[A-Za-z0-9._-]{8,}").unwrap(), "$1***"),
+        (
+            Regex::new(r"(Bearer\s+)[A-Za-z0-9._-]{8,}").unwrap(),
+            "$1***",
+        ),
         // PoolGate virtual client keys.
         (Regex::new(r"pg_live_[A-Za-z0-9]+").unwrap(), "pg_live_***"),
         // OpenAI opaque access tokens.
@@ -113,11 +117,9 @@ pub fn read_logs(
     page_size: u32,
     keyword: Option<&str>,
 ) -> Result<AppLogPage, String> {
-    let file_path = latest_log_file(log_dir)
-        .ok_or_else(|| "日志目录下没有 app.*.log 文件".to_string())?;
-    let file_size = std::fs::metadata(&file_path)
-        .map(|m| m.len())
-        .unwrap_or(0);
+    let file_path =
+        latest_log_file(log_dir).ok_or_else(|| "日志目录下没有 app.*.log 文件".to_string())?;
+    let file_size = std::fs::metadata(&file_path).map(|m| m.len()).unwrap_or(0);
 
     let bytes = read_file_tail(&file_path, MAX_READ_BYTES)?;
     let content = String::from_utf8_lossy(&bytes);
@@ -140,7 +142,11 @@ pub fn read_logs(
     let total = lines.len();
     let start = ((page.max(1) - 1) * page_size) as usize;
     let end = (start + page_size as usize).min(total);
-    let page_lines = if start < total { lines[start..end].to_vec() } else { vec![] };
+    let page_lines = if start < total {
+        lines[start..end].to_vec()
+    } else {
+        vec![]
+    };
 
     Ok(AppLogPage {
         lines: page_lines,

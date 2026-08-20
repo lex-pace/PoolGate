@@ -262,49 +262,62 @@ function PoolDetail({ data, id, onSelect }: { data: RouteTopology; id: string; o
   );
 }
 
-function ProviderDetail({ detail, loading }: { detail?: ProviderTopologyDetail; loading: boolean }) {
+function ProviderDetail({ data, detail, loading }: { data: RouteTopology; detail?: ProviderTopologyDetail; loading: boolean }) {
   if (loading) return <div className="pg-tv-detail-body pg-tv-loading"><RefreshCw size={17} className="animate-spin" />正在加载厂商账号</div>;
   if (!detail) return <div className="pg-tv-detail-body pg-tv-empty">暂无厂商详情</div>;
   const traffic = detail.traffic;
   const accounts = detail.accounts || [];
   const healthy = accounts.filter((account) => account.health_status === "healthy" || (account.routable && account.health_status !== "error")).length;
+  const currentPool = data.active_route
+    ? data.pools.find((pool) => pool.id === data.active_route?.pool_id)?.name
+    : undefined;
+  const currentPath = data.active_route?.provider_id === detail.id
+    ? [currentPool, detail.name].filter(Boolean).join(" → ")
+    : undefined;
   return (
     <div className="pg-tv-detail-body">
       <DetailHero
-        icon={<ServerCog size={18} />}
-        kind="Upstream Provider"
+        icon={<span className="pg-tv-provider-initial">AI</span>}
+        kind={detail.provider_type || "Upstream Provider"}
         name={detail.name}
         subtitle={detail.base_url_masked}
         health={detail.enabled ? "healthy" : "disabled"}
       />
+      {currentPath && (
+        <div className="pg-tv-current-path">
+          <div><Activity size={13} /><strong>当前路径</strong></div>
+          <p>{currentPath}</p>
+        </div>
+      )}
       <MetricGrid items={[
-        { label: "请求(attempt)", value: metric(traffic.total_requests, "0") },
+        { label: "15m 请求", value: metric(traffic.total_requests, "0") },
         { label: "成功率", value: traffic.total_requests ? pct(traffic.success_rate) : "未提供" },
-        { label: "平均延迟", value: latency(traffic.avg_latency_ms) },
-        { label: "P95", value: latency(traffic.p95_latency_ms) },
+        { label: "P95 延迟", value: latency(traffic.p95_latency_ms ?? traffic.avg_latency_ms) },
       ]} />
       <MetricGrid items={[
+        { label: "平均延迟", value: latency(traffic.avg_latency_ms) },
         { label: "Tokens", value: metric(traffic.total_tokens, "0") },
-        { label: "成本", value: typeof traffic.total_cost === "number" ? `$${traffic.total_cost.toFixed(4)}` : "未提供" },
         { label: "健康账号", value: `${healthy}/${accounts.length}` },
         { label: "TTFT", value: latency(traffic.avg_ttft_ms) },
       ]} />
       <div className="pg-tv-account-head"><strong>关联账号</strong><span>{accounts.length}</span></div>
       <div className="pg-tv-account-list">
         {accounts.map((account) => {
-          const healthStatus = !account.routable ? "待适配" : account.health_status === "error" || account.status === "exhausted" || account.status === "token_expired" ? "故障" : account.quota_remaining_percent != null && account.quota_remaining_percent < 15 ? "告警" : "正常";
           const healthTone = !account.routable ? "warning" : account.health_status === "error" || account.status === "exhausted" || account.status === "token_expired" ? "fault" : account.quota_remaining_percent != null && account.quota_remaining_percent < 15 ? "warning" : "healthy";
+          const badge = !account.routable ? undefined
+            : healthTone === "fault" ? { text: "故障", tone: "fault" }
+            : healthTone === "warning" ? { text: "告警", tone: "warning" }
+            : { text: `${account.concurrency_active}/${account.concurrency_limit} 并发`, tone: "ok" };
           return (
             <div key={account.id} className="pg-tv-account-row">
-              <div className="pg-tv-account-main"><i className={`health-${healthTone}`} /><span><strong>{account.name}</strong><small>{account.email_masked || account.plan_type || account.credential_type}{!account.routable ? " · 待适配" : ""}</small></span></div>
-              <div className="pg-tv-account-cell"><b>{account.quota_remaining_percent == null ? "未提供" : `${Math.round(account.quota_remaining_percent)}%`}</b><small>配额</small></div>
-              <div className="pg-tv-account-cell"><b>{account.concurrency_active}/{account.concurrency_limit}</b><small>{account.queued_requests ? `排队 ${account.queued_requests}` : "并发"}</small></div>
-              <div className="pg-tv-account-cell"><b>{metric(account.traffic?.total_requests, "0")}</b><small>{account.traffic?.success_rate != null && account.traffic?.total_requests ? `${account.traffic.success_rate.toFixed(0)}% 成功` : "请求"}</small></div>
+              <div className="pg-tv-account-main"><i className={`health-${healthTone}`} /><span><strong>{account.name}</strong><small>{[account.email_masked || account.plan_type, account.credential_type].filter(Boolean).join(" · ")}{!account.routable ? " · 待适配" : ""}</small></span></div>
+              {badge ? <span className={`pg-tv-account-badge tone-${badge.tone}`}>{badge.text}</span> : <span className="pg-tv-account-badge tone-muted">待适配</span>}
             </div>
           );
         })}
         {!accounts.length && <div className="pg-tv-list-empty"><KeyRound size={16} />暂无关联账号</div>}
       </div>
+      <div className="pg-tv-inspector-hint">账号仅在厂商详情展示，不进入拓扑画布</div>
     </div>
   );
 }
@@ -423,20 +436,27 @@ export default function TopologyInspector({ data, selection, onSelect, onOpenDas
 
   const isNode = selection.kind === "node";
   const nodeKind = isNode ? selection.nodeKind : undefined;
-  const title = !isNode
+  const section = !isNode
     ? (selection.kind === "edge" ? "连线详情" : "路由总览")
-    : nodeKind === "gateway" ? "网关总览"
-    : nodeKind === "provider" ? data.providers.find((p) => p.id === selection.entityId)?.name ?? "厂商详情"
-    : nodeKind === "pool" ? data.pools.find((p) => p.id === selection.entityId)?.name ?? "路由池详情"
-    : nodeKind === "protocol" ? data.protocols.find((p) => p.id === selection.entityId)?.name ?? "协议详情"
-    : nodeKind === "account" ? data.accounts.find((p) => p.id === selection.entityId)?.name ?? "账号详情"
+    : nodeKind === "gateway" ? "网关详情"
+    : nodeKind === "provider" ? "上游厂商详情"
+    : nodeKind === "pool" ? "路由池详情"
+    : nodeKind === "protocol" ? "协议详情"
+    : nodeKind === "account" ? "账号详情"
     : "节点详情";
+  const title = isNode
+    ? (nodeKind === "provider" ? data.providers.find((p) => p.id === selection.entityId)?.name ?? "厂商"
+      : nodeKind === "pool" ? data.pools.find((p) => p.id === selection.entityId)?.name ?? "路由池"
+      : nodeKind === "protocol" ? data.protocols.find((p) => p.id === selection.entityId)?.name ?? "协议"
+      : nodeKind === "account" ? data.accounts.find((p) => p.id === selection.entityId)?.name ?? "账号"
+      : "网关")
+    : (selection.kind === "edge" ? "连线" : "网关");
 
   return (
     <aside className="pg-tv-inspector">
       <div className="pg-tv-inspector-head">
         <div>
-          <span>Node Inspector</span>
+          <span>{section}</span>
           <strong title={title}>{title}</strong>
         </div>
         <div className="pg-tv-inspector-head-actions">
@@ -458,7 +478,7 @@ export default function TopologyInspector({ data, selection, onSelect, onOpenDas
       {selection.kind === "node" && nodeKind === "pool" && <PoolDetail data={data} id={selection.entityId} onSelect={onSelect} />}
       {selection.kind === "node" && nodeKind === "provider" && (detailError
         ? <div className="pg-tv-detail-body pg-tv-empty"><AlertTriangle size={17} /><span>厂商详情加载失败<small title={detailError}>{detailError}</small></span></div>
-        : <ProviderDetail detail={providerDetail} loading={detailLoading} />)}
+        : <ProviderDetail data={data} detail={providerDetail} loading={detailLoading} />)}
       {selection.kind === "node" && nodeKind === "account" && <AccountDetail data={data} accountId={selection.entityId} onSelect={onSelect} />}
       {selection.kind === "edge" && <EdgeDetail data={data} edgeId={selection.edgeId} onSelect={onSelect} />}
     </aside>

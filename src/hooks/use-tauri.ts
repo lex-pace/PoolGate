@@ -588,6 +588,78 @@ export function useSetCloseButtonBehavior() {
   });
 }
 
+export function useSetListenAddr() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (mode: "localhost" | "lan") => api.setListenAddr(mode),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["gateway_settings"] });
+      qc.invalidateQueries({ queryKey: ["proxy_status"] });
+    },
+  });
+}
+
+export function useLanAddresses() {
+  return useQuery({
+    queryKey: ["lan_addresses"],
+    queryFn: api.getLanAddresses,
+    staleTime: 60_000,
+  });
+}
+
+// ============ Product Mode ============
+
+export function useAppMode() {
+  return useQuery({
+    queryKey: ["app_mode"],
+    queryFn: api.getAppMode,
+    staleTime: Infinity,
+  });
+}
+
+export function useSetAppMode() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (mode: api.AppMode) => api.setAppMode(mode),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["app_mode"] }),
+  });
+}
+
+// ============ First-run Onboarding ============
+
+export function useOnboardingState() {
+  return useQuery({
+    queryKey: ["onboarding_state"],
+    queryFn: api.getOnboardingState,
+  });
+}
+
+export function useSetOnboardingCompleted() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (completed: boolean) => api.setOnboardingCompleted(completed),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["onboarding_state"] }),
+  });
+}
+
+// ============ Menu Bar ============
+
+export function useMenuBarMainText() {
+  return useQuery({
+    queryKey: ["menu_bar_main_text"],
+    queryFn: api.getMenuBarMainText,
+    staleTime: Infinity,
+  });
+}
+
+export function useSetMenuBarMainText() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (mainText: api.MenuBarMainText) => api.setMenuBarMainText(mainText),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["menu_bar_main_text"] }),
+  });
+}
+
 // ============ Client Keys (virtual keys → route pools) ============
 
 export function useClientKeys() {

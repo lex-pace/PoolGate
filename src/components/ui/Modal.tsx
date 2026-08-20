@@ -1,7 +1,7 @@
 import React, { useEffect } from "react";
 
-export function Modal({ open, onClose, title, children, className = "", contentClassName = "", placement = "center" }: {
-  open: boolean; onClose: () => void; title?: string; children: React.ReactNode; className?: string; contentClassName?: string; placement?: "center" | "right";
+export function Modal({ open, onClose, title, children, className = "", contentClassName = "", placement = "center", style }: {
+  open: boolean; onClose: () => void; title?: string; children: React.ReactNode; className?: string; contentClassName?: string; placement?: "center" | "right"; style?: React.CSSProperties;
 }) {
   useEffect(() => {
     if (!open) return;
@@ -12,10 +12,10 @@ export function Modal({ open, onClose, title, children, className = "", contentC
   if (!open) return null;
   return (
     <div className={`fixed inset-0 z-[110] flex ${placement === "right" ? "items-stretch justify-end" : "items-center justify-center"}`}>
-      <div className="absolute inset-0 bg-black/45 backdrop-blur-[2px] animate-fade-in" onClick={onClose} />
+      <div className="absolute inset-0 bg-black/55 backdrop-blur-[3px] animate-fade-in" onClick={onClose} />
       <div
-        className={`relative bg-[var(--bg-elevated)] border border-[var(--border-default)] w-full flex flex-col overflow-hidden ${placement === "right" ? "h-full max-h-none rounded-l-xl border-y-0 border-r-0 animate-slide-left" : "rounded-lg max-w-lg mx-4 max-h-[85vh] animate-slide-up"} ${className}`}
-        style={{ boxShadow: "var(--shadow-elevated)" }}
+        className={`pg-modal-shell relative border border-[var(--border-default)] w-full flex flex-col overflow-hidden ${placement === "right" ? "h-full max-h-none rounded-l-xl border-y-0 border-r-0 animate-slide-left" : "rounded-lg max-w-lg mx-4 max-h-[85vh] animate-slide-up"} ${className}`}
+        style={{ backgroundColor: "var(--bg-surface-solid)", boxShadow: "var(--shadow-elevated)", ...style }}
       >
         {title && (
           <div className="flex items-center justify-between px-5 py-3.5 border-b border-[var(--border-default)]">
@@ -23,7 +23,7 @@ export function Modal({ open, onClose, title, children, className = "", contentC
             <button onClick={onClose} className="text-[var(--text-dim)] hover:text-[var(--text-primary)] transition-colors text-lg leading-none">✕</button>
           </div>
         )}
-        <div className={`flex-1 min-h-0 overflow-auto p-5 ${contentClassName}`}>{children}</div>
+        <div className={`flex-1 min-h-0 overflow-x-hidden overflow-y-auto p-5 ${contentClassName}`}>{children}</div>
       </div>
     </div>
   );

@@ -614,9 +614,12 @@ mod tests {
 
         repo.recover_status(&connection, "a", Some("token_expired"))
             .unwrap();
-        repo.recover_status(&connection, "b", Some("error")).unwrap();
-        repo.recover_status(&connection, "c", Some("disabled")).unwrap();
-        repo.recover_status(&connection, "d", Some("active")).unwrap();
+        repo.recover_status(&connection, "b", Some("error"))
+            .unwrap();
+        repo.recover_status(&connection, "c", Some("disabled"))
+            .unwrap();
+        repo.recover_status(&connection, "d", Some("active"))
+            .unwrap();
 
         let conn = connection.lock().unwrap();
         let statuses: Vec<String> = conn

@@ -340,12 +340,14 @@ fn persist_codex_account(
 
     // Auto-add to routing pool.
     // provider_id was moved into account.provider_id, so read it from account.
-    let provider = state.db.providers.get_by_id(
-        &state.db.conn,
-        account.provider_id.as_deref().unwrap_or(""),
-    )?
-    .ok_or_else(|| "Provider not found after creation".to_string())?;
-    let models: Vec<String> = provider.models.as_deref()
+    let provider = state
+        .db
+        .providers
+        .get_by_id(&state.db.conn, account.provider_id.as_deref().unwrap_or(""))?
+        .ok_or_else(|| "Provider not found after creation".to_string())?;
+    let models: Vec<String> = provider
+        .models
+        .as_deref()
         .and_then(|raw| serde_json::from_str(raw).ok())
         .unwrap_or_default();
     crate::services::pool_onboarding::ensure_account_in_pool(

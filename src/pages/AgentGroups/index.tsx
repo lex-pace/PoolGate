@@ -25,6 +25,7 @@ import {
   useAddGroupModelResources,
   useSetGroupModelAccountIds,
   useRemoveGroupModelResource,
+  useSetGroupModelResources,
   useGroupDashboard,
   useAgentApps,
   usePreviewAgentAppConfig,
@@ -36,6 +37,8 @@ import { useToast } from "@/components/ui/Toast";
 import type { Account, AgentAppInfo, AgentGroup, ClientKeyView } from "@/lib/tauri-commands";
 import {
   Check,
+  ChevronDown,
+  ChevronRight,
   Copy,
   ExternalLink,
   Gauge,
@@ -51,10 +54,13 @@ import {
   PowerOff,
   RefreshCw,
   Route,
+  Search,
   ShieldCheck,
   Trash2,
+  Users,
   X,
 } from "lucide-react";
+import Segmented from "@/components/ui/Segmented";
 
 const protocolLabel: Record<string, string> = {
   openai: "OpenAI compatible",
@@ -147,6 +153,26 @@ function parseModels(account: Account) {
   return account.models.split(",").map((item) => item.trim()).filter(Boolean);
 }
 
+/// 自定义供应商判定：本地类型、名称/Base URL 含 custom/自定义，或账号显式打上
+/// resource_category:custom 标签（与模型资源页「自定义」分类口径一致）。
+function providerLooksCustom(provider?: { type?: string; name?: string; base_url?: string }) {
+  if (!provider) return true;
+  if (provider.type === "local") return true;
+  const signature = `${provider.name || ""} ${provider.base_url || ""}`.toLowerCase();
+  return signature.includes("custom") || signature.includes("自定义");
+}
+
+function accountHasCustomCategory(account: Account) {
+  if (!account.tags) return false;
+  try {
+    const parsed = JSON.parse(account.tags);
+    if (Array.isArray(parsed)) return parsed.some((tag) => tag === "resource_category:custom");
+  } catch {
+    // Legacy comma-separated tags.
+  }
+  return account.tags.split(",").map((tag) => tag.trim()).includes("resource_category:custom");
+}
+
 function AgentAppIcon({ app }: { app: AgentAppInfo }) {
   const label = app.name.toLowerCase();
   if (label.includes("claude")) return <span className="text-[10px] font-bold">C</span>;
@@ -227,7 +253,7 @@ function PoolCard({
     <Card className={`flex h-full flex-col overflow-hidden p-0 ${disabled ? "opacity-60" : ""}`}>
       <CBody className="flex h-full flex-col">
         {/* Header: Name + Status + Actions */}
-        <div className="flex items-start justify-between gap-2 border-b px-3 py-2.5" style={{ borderColor: "var(--border-subtle)" }}>
+        <div className="flex items-start justify-between gap-3 border-b px-4 py-3" style={{ borderColor: "var(--border-subtle)" }}>
           <div className="flex min-w-0 items-start gap-2.5">
             <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[var(--bg-inset)]"><StatusDot status={group.enabled ? "ok" : "mute"} pulse={group.enabled} /></div>
             <div className="min-w-0">
@@ -236,8 +262,8 @@ function PoolCard({
                 <Badge variant="brand">{protocolLabel[group.protocol] || group.protocol}</Badge>
                 {!group.enabled && <Badge variant="mute" dot>已停用</Badge>}
               </div>
-              <p className="mt-0.5 truncate text-[9px] leading-4 text-[var(--text-dim)]" title={group.description || "按模型能力组织的资源池"}>{group.description || "按模型能力组织的资源池"}</p>
-              <div className="flex flex-wrap gap-x-2.5 text-[9px] text-[var(--text-secondary)]">
+              <p className="mt-1 truncate text-[10px] leading-5 text-[var(--text-dim)]" title={group.description || "按模型能力组织的资源池"}>{group.description || "按模型能力组织的资源池"}</p>
+              <div className="mt-0.5 flex flex-wrap gap-x-3 text-[10px] text-[var(--text-secondary)]">
                 <span>{strategyLabel[group.strategy || "round_robin"] || group.strategy}</span>
                 <span>{group.created_at?.slice(0, 10) || "--"}</span>
               </div>
@@ -252,18 +278,18 @@ function PoolCard({
         </div>
 
         {/* Main Content Area */}
-        <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-3 py-2.5">
+        <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-4 py-3">
           {/* Top Section: API Key + Stats + Provider Quota */}
           <section className="rounded-lg border" style={{ borderColor: "var(--border-subtle)" }}>
             {/* API Key */}
-            <div className="flex items-center justify-between gap-2 border-b px-2.5 py-2" style={{ borderColor: "var(--border-subtle)" }}>
+            <div className="flex items-center justify-between gap-2 border-b px-3 py-2.5" style={{ borderColor: "var(--border-subtle)" }}>
               <div className="flex min-w-0 items-center gap-2">
-                <KeyRound size={12} className="shrink-0 text-[var(--color-brand)]" />
+                <KeyRound size={13} className="shrink-0 text-[var(--color-brand)]" />
                 <div className="min-w-0">
-                  <code className="max-w-xs truncate text-[10px] text-[var(--text-secondary)] pg-mono" title={managedKey ? `${managedKey.key_prefix}••••••••${managedKey.key_last_four}` : "尚未生成"}>{managedKey ? `${managedKey.key_prefix}••••••••${managedKey.key_last_four}` : "尚未生成"}</code>
+                  <code className="max-w-xs truncate text-[11px] text-[var(--text-secondary)] pg-mono" title={managedKey ? `${managedKey.key_prefix}••••••••${managedKey.key_last_four}` : "尚未生成"}>{managedKey ? `${managedKey.key_prefix}••••••••${managedKey.key_last_four}` : "尚未生成"}</code>
                 </div>
               </div>
-              <button onClick={() => onRotateKey(group.id, !!managedKey)} className="rounded bg-[var(--color-brand)] px-2 py-1 text-[9px] font-medium text-white transition-colors hover:bg-[var(--color-brand)]/80" title={managedKey ? "刷新替换号池专属 Key" : "生成号池专属 Key"}>{managedKey ? "刷新" : "生成"}</button>
+              <button onClick={() => onRotateKey(group.id, !!managedKey)} className="rounded bg-[var(--color-brand)] px-2.5 py-1 text-[10px] font-medium text-white transition-colors hover:bg-[var(--color-brand)]/80" title={managedKey ? "刷新替换号池专属 Key" : "生成号池专属 Key"}>{managedKey ? "刷新" : "生成"}</button>
             </div>
             {/* Stats Grid */}
             <div className="grid grid-cols-5 divide-x" style={{ borderColor: "var(--border-subtle)" }}>
@@ -274,22 +300,22 @@ function PoolCard({
                 ["Tokens", dashboard?.traffic.total_tokens],
                 ["成功率", dashboard ? `${dashboard.traffic.success_rate.toFixed(1)}%` : undefined],
               ].map(([label, value]) => (
-                <div key={String(label)} className="min-w-0 px-2 py-2 text-center" style={{ borderColor: "var(--border-subtle)" }}>
-                  <div className="truncate text-[8px] uppercase tracking-wide text-[var(--text-dim)]">{label}</div>
-                  <div className="truncate text-[11px] font-semibold leading-4 text-[var(--text-primary)] pg-mono">{dashboardLoading ? "…" : value ?? 0}</div>
+                <div key={String(label)} className="min-w-0 px-2 py-2.5 text-center" style={{ borderColor: "var(--border-subtle)" }}>
+                  <div className="truncate text-[9px] uppercase tracking-wide text-[var(--text-dim)]">{label}</div>
+                  <div className="truncate text-[12px] font-semibold leading-5 text-[var(--text-primary)] pg-mono">{dashboardLoading ? "…" : value ?? 0}</div>
                 </div>
               ))}
             </div>
             {/* Provider Quota */}
             {dashboard?.quota_by_provider.length ? (
-              <div className="border-t px-2.5 py-2" style={{ borderColor: "var(--border-subtle)" }}>
-                <div className="mb-1.5 text-[9px] font-medium text-[var(--text-dim)]">PROVIDER 额度</div>
-                <div className="space-y-1.5">
+              <div className="border-t px-3 py-2.5" style={{ borderColor: "var(--border-subtle)" }}>
+                <div className="mb-2 text-[10px] font-medium text-[var(--text-dim)]">PROVIDER 额度</div>
+                <div className="space-y-2">
                   {dashboard.quota_by_provider.map((quota) => (
                     <div key={quota.provider_id} className="flex items-center gap-2">
-                      <span className="w-20 shrink-0 truncate text-[9px] text-[var(--text-primary)]" title={quota.provider_name}>{quota.provider_name}</span>
-                      <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-[var(--bg-hover)]"><div className="h-full rounded-full" style={{ width: `${Math.min(100, Math.max(0, quota.average_used_percent))}%`, background: quota.average_used_percent >= 90 ? "var(--color-err)" : quota.average_used_percent >= 70 ? "var(--color-warn)" : "var(--color-ok)" }} /></div>
-                      <span className={`shrink-0 text-[8px] ${quota.abnormal_accounts ? "text-[var(--color-warn)]" : "text-[var(--text-dim)]"}`}>{quota.account_count}账号</span>
+                      <span className="w-24 shrink-0 truncate text-[10px] text-[var(--text-primary)]" title={quota.provider_name}>{quota.provider_name}</span>
+                      <div className="h-2 flex-1 overflow-hidden rounded-full bg-[var(--bg-hover)]"><div className="h-full rounded-full" style={{ width: `${Math.min(100, Math.max(0, quota.average_used_percent))}%`, background: quota.average_used_percent >= 90 ? "var(--color-err)" : quota.average_used_percent >= 70 ? "var(--color-warn)" : "var(--color-ok)" }} /></div>
+                      <span className={`shrink-0 text-[9px] ${quota.abnormal_accounts ? "text-[var(--color-warn)]" : "text-[var(--text-dim)]"}`}>{quota.account_count}账号</span>
                     </div>
                   ))}
                 </div>
@@ -299,21 +325,21 @@ function PoolCard({
 
           {/* Address Section */}
           <section>
-            <div className="mb-1.5 flex items-center justify-between gap-2">
-              <div className="pg-eyebrow">接入地址</div>
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <div className="pg-eyebrow" style={{ fontSize: "11px" }}>接入地址</div>
               <code className="text-[8px] text-[var(--text-dim)] pg-mono">127.0.0.1:{proxyPort}</code>
             </div>
             <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
               {addressBlocks.map((block) => (
-                <div key={block.id} className="rounded-lg border bg-[var(--bg-inset)] p-2" style={{ borderColor: "var(--border-subtle)" }}>
-                  <div className="mb-1.5 text-[10px] font-semibold text-[var(--text-primary)]">{block.label}</div>
-                  <div className="space-y-1">
+                <div key={block.id} className="rounded-lg border bg-[var(--bg-inset)] p-2.5" style={{ borderColor: "var(--border-subtle)" }}>
+                  <div className="mb-2 text-[11px] font-semibold text-[var(--text-primary)]">{block.label}</div>
+                  <div className="space-y-1.5">
                     {block.rows.filter((row) => row.id !== "base").map((row) => {
                       const tag = `pool-url-${group.id}-${block.id}-${row.id}`;
                       return (
-                        <div key={row.id} className="flex min-w-0 items-center gap-1.5">
-                          <span className="w-[76px] shrink-0 text-[9px] text-[var(--text-dim)]">{row.label}</span>
-                          <code className="min-w-0 flex-1 truncate text-[10px] text-[var(--text-primary)] pg-mono" title={row.url}>{row.url}</code>
+                        <div key={row.id} className="flex min-w-0 items-center gap-2">
+                          <span className="w-[80px] shrink-0 text-[10px] text-[var(--text-dim)]">{row.label}</span>
+                          <code className="min-w-0 flex-1 truncate text-[11px] text-[var(--text-primary)] pg-mono" title={row.url}>{row.url}</code>
                           <button type="button" onClick={() => onCopyText(row.url, tag)} className="shrink-0 rounded p-0.5 text-[var(--text-dim)] hover:bg-[var(--bg-hover)] hover:text-[var(--color-brand)]" title={`复制 ${row.label}`} aria-label={`复制 ${row.label}`}>{copied === tag ? <Check size={10} /> : <Copy size={10} />}</button>
                         </div>
                       );
@@ -327,40 +353,60 @@ function PoolCard({
               {/* Models Section */}
           <section>
             <div className="flex items-center justify-between gap-2">
-              <div className="pg-eyebrow">模型供应商 · {sortedModels.length}</div>
+              <div className="pg-eyebrow" style={{ fontSize: "11px" }}>模型供应商 · {sortedModels.length}</div>
               <div className="flex items-center gap-0.5">
-                <button disabled={!sortedModels.length} onClick={() => onCopyAllModels(group.id, sortedModels.map((resource) => resource.model))} className="inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-[9px] font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--color-brand)] disabled:cursor-not-allowed disabled:opacity-40" title="选择分隔符并复制全部模型"><Copy size={10} /> 复制全部</button>
-                <button onClick={() => onManageModels(group.id)} className="inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-[9px] font-medium text-[var(--color-brand)] hover:bg-[var(--color-brand-subtle)]"><Plus size={11} /> 添加</button>
+                <button disabled={!sortedModels.length} onClick={() => onCopyAllModels(group.id, sortedModels.map((resource) => resource.model))} className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--color-brand)] disabled:cursor-not-allowed disabled:opacity-40" title="选择分隔符并复制全部模型"><Copy size={10} /> 复制全部</button>
+                <button onClick={() => onManageModels(group.id)} className="inline-flex items-center gap-1 rounded-md border border-[var(--color-brand)]/40 px-2.5 py-1 text-[10px] font-medium text-[var(--color-brand)] hover:bg-[var(--color-brand-subtle)] cursor-pointer"><Plus size={11} /> 添加供应商</button>
               </div>
             </div>
-            <div className="mt-1 min-h-14 rounded-md border p-1.5" style={{ borderColor: "var(--border-subtle)" }}>
+            <div className="mt-2 min-h-14 rounded-md border p-2" style={{ borderColor: "var(--border-subtle)" }}>
               {modelsLoading ? <div className="flex items-center justify-center py-3"><Spinner size={14} /></div> : modelsError ? (
                 <div className="py-3 text-center text-[9px] text-[var(--color-err)]">模型供应商加载失败</div>
               ) : sortedModels.length ? (
-                <div className="max-h-[92px] overflow-y-auto pr-0.5">
-                  <div className="flex flex-wrap gap-1">
-                    {sortedModels.map((resource) => {
+                <div className="max-h-[160px] overflow-y-auto pr-0.5">
+                  {/* Compact table layout */}
+                  <div className="space-y-1">
+                    {sortedModels.slice(0, 8).map((resource) => {
                       const tag = `pool-model-${group.id}-${resource.model}`;
                       const providerNames = (resource as any)._providers?.join(", ") || providerMap.get(resource.provider_id) || "Provider";
                       return (
-                        <span key={resource.model} className="inline-flex max-w-full items-center gap-0.5 rounded border bg-[var(--color-brand-subtle)] px-1.5 py-0.5 text-[9px] leading-4 text-[var(--text-primary)]" style={{ borderColor: "var(--color-brand)" }}>
-                          <button type="button" onDoubleClick={() => onCopyText(resource.model, tag)} className="max-w-40 truncate text-left" title={`${providerNames} · ${resource.model}；双击复制模型名称`} aria-label={`双击复制模型 ${resource.model}`}>{copied === tag ? <span className="inline-flex items-center gap-0.5 text-[var(--color-ok)]"><Check size={9} />已复制</span> : resource.model}</button>
-                          <button disabled={removingModel} onClick={() => onRemoveModel(group.id, resource.provider_id, resource.model)} className="rounded p-0.5 text-[var(--text-dim)] hover:bg-[var(--color-err-bg)] hover:text-[var(--color-err)] disabled:opacity-40" title={`从号池移除 ${resource.model}`} aria-label={`从号池移除 ${resource.model}`}><X size={9} /></button>
-                        </span>
+                        <div key={resource.model} className="flex items-center gap-2 rounded px-2 py-1.5 hover:bg-[var(--bg-hover)] group">
+                          <span className="flex-1 min-w-0 text-[11px] text-[var(--text-primary)] truncate" title={`${providerNames} · ${resource.model}`}>
+                            {resource.model}
+                          </span>
+                          <span className="shrink-0 text-[9px] text-[var(--text-dim)] truncate max-w-[100px]" title={providerNames}>
+                            {providerNames}
+                          </span>
+                          <div className="flex items-center gap-0.5 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                            <button type="button" onClick={() => onCopyText(resource.model, tag)} className="rounded p-0.5 text-[var(--text-dim)] hover:text-[var(--color-brand)]" title="复制模型名称">
+                              {copied === tag ? <Check size={9} /> : <Copy size={9} />}
+                            </button>
+                            <button disabled={removingModel} onClick={() => onRemoveModel(group.id, resource.provider_id, resource.model)} className="rounded p-0.5 text-[var(--text-dim)] hover:text-[var(--color-err)] disabled:opacity-40" title={`从号池移除 ${resource.model}`}>
+                              <X size={9} />
+                            </button>
+                          </div>
+                        </div>
                       );
                     })}
                   </div>
-                  <div className="mt-1 text-[8px] text-[var(--text-dim)]">双击模型名称可复制</div>
+                  {sortedModels.length > 8 && (
+                    <button
+                      onClick={() => onManageModels(group.id)}
+                      className="w-full mt-1 py-1 text-[9px] text-[var(--color-brand)] hover:underline text-center"
+                    >
+                      查看全部 {sortedModels.length} 个模型 →
+                    </button>
+                  )}
                 </div>
               ) : (
-                <div className="flex h-12 items-center justify-center gap-1.5 text-center"><Box size={14} className="text-[var(--color-warn)]" /><div><div className="text-[9px] text-[var(--color-warn)]">尚无模型供应商</div><div className="text-[8px] text-[var(--text-dim)]">空池不会回退全量账号</div></div></div>
+                <div className="flex h-12 items-center justify-center gap-2 text-center"><Box size={14} className="text-[var(--color-warn)]" /><div><div className="text-[10px] text-[var(--color-warn)]">尚无模型供应商</div><div className="text-[9px] text-[var(--text-dim)]">空池不会回退全量账号</div></div></div>
               )}
             </div>
           </section>
         </div>
 
         {/* Footer: Agent Apps */}
-        <div className="mt-auto flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5 border-t px-3 py-2" style={{ borderColor: "var(--border-subtle)", background: "var(--bg-inset)" }}>
+        <div className="mt-auto flex flex-wrap items-center justify-between gap-x-3 gap-y-2 border-t px-4 py-2.5" style={{ borderColor: "var(--border-subtle)", background: "var(--bg-inset)" }}>
           <div className="flex items-center gap-1.5">
             {agentApps.map((app) => (
               <button key={app.app_id} disabled={!app.installed || busyApp || models.length === 0} onClick={() => onOpenApp(app.app_id, group.id)} className="flex h-6 w-6 items-center justify-center rounded-md border text-[var(--text-secondary)] transition-all enabled:hover:border-[var(--color-brand)] enabled:hover:bg-[var(--color-brand-subtle)] enabled:hover:text-[var(--color-brand)] disabled:cursor-not-allowed disabled:opacity-35" style={{ borderColor: "var(--border-default)" }} aria-label={`使用 ${group.name} 打开 ${app.name}`} title={app.installed ? models.length ? `切换到 ${group.name} 并打开 ${app.name}` : "请先添加模型供应商" : `${app.name} 未安装`}><AgentAppIcon app={app} /></button>
@@ -464,6 +510,7 @@ export default function RoutePools() {
   const addGroupModels = useAddGroupModelResources();
   const setGroupModelAccounts = useSetGroupModelAccountIds();
   const removeGroupModel = useRemoveGroupModelResource();
+  const clearGroupModels = useSetGroupModelResources();
   const { data: groupModels = [] } = useGroupModelResources(selected);
   const { data: availableGroupModels = [], isLoading: availableModelsLoading, isError: availableModelsError, refetch: refetchAvailableModels } = useAvailableGroupModelResources(selected);
   const { data: agentApps = [] } = useAgentApps();
@@ -484,6 +531,10 @@ export default function RoutePools() {
   const [createdPoolName, setCreatedPoolName] = useState<string | null>(null);
   const [providerDraft, setProviderDraft] = useState<string[]>([]);
   const [accountDraft, setAccountDraft] = useState<Record<string, string[]>>({});
+  const [providerSearch, setProviderSearch] = useState("");
+  // 弹层左栏的分段筛选与聚焦的供应商（右栏详情）
+  const [providerFilter, setProviderFilter] = useState<"all" | "in_pool" | "custom">("all");
+  const [focusedProviderId, setFocusedProviderId] = useState<string | null>(null);
   const [editingGroup, setEditingGroup] = useState<any | null>(null);
   const [editName, setEditName] = useState("");
   const [editDescription, setEditDescription] = useState("");
@@ -509,60 +560,107 @@ export default function RoutePools() {
     return Array.from(grouped.entries());
   }, [availableGroupModels]);
 
-  const accountsByProvider = useMemo(() => {
+  // 供应商列表（按 provider 聚合，含账号详情，用于弹窗展示）
+  const providerEntries = useMemo(() => {
+    type AccountInfo = {
+      id: string;
+      name: string;
+      email?: string;
+      status: string;
+      healthStatus: string;
+      routable: boolean;
+      selected: boolean;
+    };
     const grouped = new Map<string, {
       providerName: string;
-      accounts: Map<string, { account: (typeof availableGroupModels)[number]["accounts"][number]; models: string[] }>;
+      modelCount: number;
+      accounts: Map<string, AccountInfo>;
+      allAdded: boolean;
     }>();
     availableGroupModels.forEach((resource) => {
-      const entry = grouped.get(resource.provider_id) || { providerName: resource.provider_name, accounts: new Map() };
-      resource.accounts.forEach((account) => {
-        const acc = entry.accounts.get(account.id) || { account, models: [] };
-        if (resource.already_added) acc.models.push(`${resource.model} · 已入池`);
-        else acc.models.push(resource.model);
-        entry.accounts.set(account.id, acc);
+      const entry = grouped.get(resource.provider_id) || {
+        providerName: resource.provider_name,
+        modelCount: 0,
+        accounts: new Map<string, AccountInfo>(),
+        allAdded: true,
+      };
+      entry.modelCount += 1;
+      if (!resource.already_added) entry.allAdded = false;
+      resource.accounts.forEach((a) => {
+        const existing = entry.accounts.get(a.id);
+        // selected=true 只要任一资源中标记为选中即可
+        entry.accounts.set(a.id, {
+          id: a.id,
+          name: a.name,
+          email: a.email,
+          status: a.status,
+          healthStatus: a.health_status,
+          routable: a.routable,
+          selected: existing ? (existing.selected || a.selected) : a.selected,
+        });
       });
       grouped.set(resource.provider_id, entry);
     });
-    return Array.from(grouped.entries()).map(([providerId, value]) => ({
-      providerId,
-      providerName: value.providerName,
-      // 对账号内的模型列表进行去重
-      accounts: Array.from(value.accounts.values()).map((acc) => ({
-        ...acc,
-        models: Array.from(new Set(acc.models)),
-      })),
-    }));
+    return Array.from(grouped.entries()).map(([providerId, { providerName, modelCount, accounts, allAdded }]) => {
+      const accountList = Array.from(accounts.values());
+      return {
+        providerId,
+        providerName,
+        modelCount,
+        accountCount: accountList.filter((a) => a.routable).length,
+        healthyCount: accountList.filter((a) => a.routable && !["error", "exhausted", "token_expired"].includes(a.status)).length,
+        allAdded,
+        accounts: accountList,
+      };
+    });
   }, [availableGroupModels]);
 
-  const providerAccountSelection = useMemo(() => {
-    const map: Record<string, { allRoutable: string[]; healthy: string[]; selected: Set<string> }> = {};
-    accountsByProvider.forEach(({ providerId, accounts }) => {
-      const allRoutable = accounts.filter((item) => item.account.routable).map((item) => item.account.id);
-      const healthy = accounts
-        .filter((item) => item.account.routable && !["error", "exhausted", "token_expired"].includes(item.account.status))
-        .map((item) => item.account.id);
-      const selected = new Set<string>();
-      accounts.forEach((item) => {
-        if (item.account.selected) selected.add(item.account.id);
-      });
-      map[providerId] = { allRoutable, healthy, selected };
+  // 自定义供应商分组：满足自定义口径的供应商归入「自定义」组，可整组选择。
+  const customProviderIds = useMemo(() => {
+    const ids = new Set<string>();
+    providers.forEach((provider) => {
+      if (providerLooksCustom(provider)) ids.add(provider.id);
     });
-    return map;
-  }, [accountsByProvider]);
+    accounts.forEach((account) => {
+      if (account.provider_id && accountHasCustomCategory(account)) ids.add(account.provider_id);
+    });
+    return ids;
+  }, [providers, accounts]);
+
+  const regularProviderEntries = providerEntries.filter((entry) => !customProviderIds.has(entry.providerId));
+  const customProviderEntries = providerEntries.filter((entry) => customProviderIds.has(entry.providerId));
 
   React.useEffect(() => {
     setProviderDraft([]);
     setAccountDraft({});
+    setProviderSearch("");
+    setProviderFilter("all");
+    setFocusedProviderId(null);
   }, [selected]);
 
+  // 当可用供应商数据加载后，初始化草稿为已入池的供应商集合，账号草稿设为已选中的账号
   React.useEffect(() => {
-    setProviderDraft((current) => current.filter((providerId) =>
-      availableGroupModels.some((resource) =>
-        resource.provider_id === providerId && !resource.already_added,
-      ),
-    ));
-  }, [availableGroupModels]);
+    if (!showMembers) return;
+    const alreadyInPool = new Set<string>();
+    const draft: Record<string, string[]> = {};
+    availableGroupModels.forEach((resource) => {
+      if (resource.already_added) {
+        alreadyInPool.add(resource.provider_id);
+      }
+    });
+    // 为已入池供应商初始化账号草稿（从资源中收集已选中的账号）
+    alreadyInPool.forEach((providerId) => {
+      const selectedAccountIds = new Set<string>();
+      availableGroupModels
+        .filter((r) => r.provider_id === providerId)
+        .forEach((r) => r.accounts.filter((a) => a.selected).forEach((a) => selectedAccountIds.add(a.id)));
+      if (selectedAccountIds.size > 0) {
+        draft[providerId] = Array.from(selectedAccountIds);
+      }
+    });
+    setProviderDraft(Array.from(alreadyInPool));
+    setAccountDraft(draft);
+  }, [showMembers, availableGroupModels]);
 
   const handleCreate = async () => {
     if (!newName.trim()) {
@@ -680,99 +778,210 @@ export default function RoutePools() {
     }
   };
 
-  const handleToggleProvider = (providerId: string, availableCount: number) => {
-    if (!availableCount) return;
+  // 切换供应商选择状态：选中 = 该供应商将入池（继承全部模型 + 全部可路由账号），取消 = 该供应商将从池中移除。
+  const handleToggleProvider = (providerId: string) => {
+    const turningOn = !providerDraft.includes(providerId);
     setProviderDraft((current) => current.includes(providerId)
       ? current.filter((item) => item !== providerId)
       : [...current, providerId]);
+    if (turningOn) {
+      // 选中供应商时，初始化账号草稿为全部可路由账号
+      const entry = providerEntries.find((e) => e.providerId === providerId);
+      if (entry) {
+        const routableIds = entry.accounts.filter((a) => a.routable).map((a) => a.id);
+        setAccountDraft((current) => ({ ...current, [providerId]: routableIds }));
+      }
+    } else {
+      // 取消选中时，清除该供应商的账号草稿
+      setAccountDraft((current) => {
+        const next = { ...current };
+        delete next[providerId];
+        return next;
+      });
+    }
   };
 
-  const toggleAccountSelection = (providerId: string, accountId: string) => {
+  // 切换单个账号的选中状态
+  const handleToggleAccount = (providerId: string, accountId: string) => {
     setAccountDraft((current) => {
-      const key = providerId;
-      const providerInfo = providerAccountSelection[providerId];
-      const previous = current[key] !== undefined ? new Set(current[key]) : new Set(providerInfo.selected);
-      if (previous.has(accountId)) previous.delete(accountId);
-      else previous.add(accountId);
-      return { ...current, [key]: Array.from(previous) };
+      const entry = providerEntries.find((e) => e.providerId === providerId);
+      const allRoutable = entry?.accounts.filter((a) => a.routable).map((a) => a.id) || [];
+      const base = current[providerId] !== undefined
+        ? new Set(current[providerId])
+        : new Set(allRoutable);
+      if (base.has(accountId)) {
+        base.delete(accountId);
+      } else {
+        base.add(accountId);
+      }
+      return { ...current, [providerId]: Array.from(base) };
     });
   };
 
+  // 全选当前供应商的所有账号
+  const selectAllAccounts = (providerId: string) => {
+    const entry = providerEntries.find((e) => e.providerId === providerId);
+    if (!entry) return;
+    const routableIds = entry.accounts.filter((a) => a.routable).map((a) => a.id);
+    setAccountDraft((current) => ({ ...current, [providerId]: routableIds }));
+  };
+
+  // 全选健康账号
   const selectAllHealthyAccounts = (providerId: string) => {
-    const info = providerAccountSelection[providerId];
-    if (!info) return;
-    setAccountDraft((current) => ({ ...current, [providerId]: info.healthy }));
+    const entry = providerEntries.find((e) => e.providerId === providerId);
+    if (!entry) return;
+    const healthyIds = entry.accounts
+      .filter((a) => a.routable && !["error", "exhausted", "token_expired"].includes(a.status))
+      .map((a) => a.id);
+    setAccountDraft((current) => ({ ...current, [providerId]: healthyIds }));
   };
 
-  const clearAccountSelection = (providerId: string) => {
-    setAccountDraft((current) => ({ ...current, [providerId]: [] }));
-  };
-
-  const resolveAccountSelection = (providerId: string): string[] | undefined => {
-    const draft = accountDraft[providerId];
-    if (draft !== undefined) return draft;
-    const info = providerAccountSelection[providerId];
-    if (!info) return undefined;
-    if (info.selected.size === info.allRoutable.length) return undefined;
-    return Array.from(info.selected);
-  };
-
-  const selectedProviderResources = useMemo(() => availableGroupModels.filter((resource) =>
-    providerDraft.includes(resource.provider_id) && !resource.already_added,
-  ), [availableGroupModels, providerDraft]);
-
-  const resourceKey = (providerId: string, model: string) => `${providerId}:${model}`;
-
-  const toggleDraftAccount = (resource: (typeof availableGroupModels)[number], accountId: string) => {
-    const key = resourceKey(resource.provider_id, resource.model);
+  // 恢复默认（清除账号草稿，使用全部可路由账号）
+  const restoreAccountSelection = (providerId: string) => {
     setAccountDraft((current) => {
-      const existing = current[key] || resource.accounts.filter((account) => account.selected).map((account) => account.id);
-      const next = existing.includes(accountId)
-        ? existing.filter((id) => id !== accountId)
-        : [...existing, accountId];
-      return { ...current, [key]: next };
+      const next = { ...current };
+      delete next[providerId];
+      return next;
     });
   };
 
-  const toggleHealthyAccounts = (resource: (typeof availableGroupModels)[number]) => {
-    const key = resourceKey(resource.provider_id, resource.model);
-    const healthy = resource.accounts
-      .filter((account) => account.routable && !["error", "exhausted", "token_expired"].includes(account.status))
-      .map((account) => account.id);
-    setAccountDraft((current) => ({
-      ...current,
-      [key]: healthy,
-    }));
+  // 全选当前筛选结果中的可见供应商（同步初始化账号草稿为全部可路由账号）。
+  const selectVisibleProviders = () => {
+    const newlyChecked = visibleProviderEntries
+      .map((entry) => entry.providerId)
+      .filter((id) => !providerDraft.includes(id));
+    if (!newlyChecked.length) return;
+    setProviderDraft((current) => Array.from(new Set([...current, ...newlyChecked])));
+    setAccountDraft((current) => {
+      const next = { ...current };
+      newlyChecked.forEach((id) => {
+        const entry = providerEntries.find((e) => e.providerId === id);
+        if (entry) next[id] = entry.accounts.filter((a) => a.routable).map((a) => a.id);
+      });
+      return next;
+    });
   };
 
+  // 当前池内供应商集合（去重）
+  const currentPoolProviders = useMemo(() => {
+    const ids = new Set<string>();
+    groupModels.forEach((resource) => ids.add(resource.provider_id));
+    return ids;
+  }, [groupModels]);
+
+  // 弹层左栏列表：分段筛选（全部 / 池内 / 自定义）叠加搜索。
+  const providerFilterBase = providerFilter === "in_pool"
+    ? providerEntries.filter((entry) => currentPoolProviders.has(entry.providerId))
+    : providerFilter === "custom"
+      ? customProviderEntries
+      : providerEntries;
+  const visibleProviderEntries = providerSearch.trim()
+    ? providerFilterBase.filter((entry) => entry.providerName.toLowerCase().includes(providerSearch.toLowerCase()))
+    : providerFilterBase;
+  const visibleUncheckedCount = visibleProviderEntries.filter((entry) => !providerDraft.includes(entry.providerId)).length;
+
+  // 右栏聚焦的供应商详情
+  const focusedEntry = providerEntries.find((entry) => entry.providerId === focusedProviderId) || null;
+
+  // 弹层打开时自动聚焦第一个可见供应商，右栏不空白。
+  React.useEffect(() => {
+    if (showMembers && !focusedProviderId && visibleProviderEntries.length > 0) {
+      setFocusedProviderId(visibleProviderEntries[0].providerId);
+    }
+  }, [showMembers, visibleProviderEntries, focusedProviderId]);
+
+  // 草稿相对池内的变更数量（用于底部摘要）
+  const pendingAddCount = providerDraft.filter((id) => !currentPoolProviders.has(id)).length;
+  const pendingRemoveCount = Array.from(currentPoolProviders).filter((id) => !providerDraft.includes(id)).length;
+
+  // 保存：按供应商粒度做 diff，新增走 addGroupModelResources，移除走 removeGroupModelResource。
+  // 对于保留在池中的供应商，如果账号草稿有变更则更新账号绑定。
   const handleAddProviders = async () => {
     if (!selected) return;
-    const resources = selectedProviderResources.map(({ provider_id, model }) => ({ provider_id, model }));
-    if (!resources.length) {
-      toast("warning", "请至少选择一个有可用模型的厂商");
+    const desiredSet = new Set(providerDraft);
+    const toAdd = providerDraft.filter((id) => !currentPoolProviders.has(id));
+    const toRemove = Array.from(currentPoolProviders).filter((id) => !desiredSet.has(id));
+    // 需要更新账号绑定的供应商：在池中且在草稿中有账号选择
+    const toUpdateAccounts = providerDraft.filter((id) =>
+      currentPoolProviders.has(id) && accountDraft[id] !== undefined,
+    );
+
+    if (!toAdd.length && !toRemove.length && !toUpdateAccounts.length) {
+      toast("info", "未发生变更");
+      setShowMembers(false);
       return;
     }
+
     try {
-      const added = await addGroupModels.mutateAsync({ groupId: selected, resources });
-      for (const providerId of providerDraft) {
-        const ids = resolveAccountSelection(providerId);
-        if (!ids || ids.length === 0) continue;
-        const providerResources = selectedProviderResources.filter((resource) => resource.provider_id === providerId);
-        for (const resource of providerResources) {
-          await setGroupModelAccounts.mutateAsync({
-            groupId: selected,
-            providerId: resource.provider_id,
-            model: resource.model,
-            accountIds: ids,
-          });
+      // 新增供应商：自动继承其全部模型
+      if (toAdd.length) {
+        const resources = toAdd.flatMap((providerId) => {
+          const models = availableGroupModels
+            .filter((r) => r.provider_id === providerId)
+            .map((r) => ({ provider_id: r.provider_id, model: r.model }));
+          return models;
+        });
+        if (resources.length) {
+          await addGroupModels.mutateAsync({ groupId: selected, resources });
         }
       }
-      toast(added === 0 ? "info" : "success", added === 0 ? "所选资源已在路由池内，账号约束已更新" : `已加入 ${added} 个模型供应商，并保存账号选择`);
+      // 移除供应商：删除其在池中的全部模型
+      if (toRemove.length) {
+        for (const providerId of toRemove) {
+          const models = groupModels.filter((r) => r.provider_id === providerId);
+          for (const resource of models) {
+            await removeGroupModel.mutateAsync({ groupId: selected, providerId: resource.provider_id, model: resource.model });
+          }
+        }
+      }
+      // 更新账号绑定：为新增供应商和已有供应商设置账号约束
+      const providersNeedingAccountBinding = [
+        ...toAdd, // 新增供应商也需要设置账号绑定
+        ...toUpdateAccounts,
+      ];
+      for (const providerId of providersNeedingAccountBinding) {
+        const ids = accountDraft[providerId];
+        if (ids === undefined) continue; // 未调整该供应商的账号
+        // 获取该供应商在池中的所有模型资源（包括刚新增的）
+        const providerResources = [
+          ...availableGroupModels.filter((r) => r.provider_id === providerId),
+        ];
+        for (const resource of providerResources) {
+          const supported = new Set(resource.accounts.filter((a) => a.routable).map((a) => a.id));
+          const valid = ids.filter((id) => supported.has(id));
+          if (valid.length > 0) {
+            await setGroupModelAccounts.mutateAsync({
+              groupId: selected,
+              providerId: resource.provider_id,
+              model: resource.model,
+              accountIds: valid,
+            });
+          }
+        }
+      }
+      const parts: string[] = [];
+      if (toAdd.length) parts.push(`加入 ${toAdd.length} 个供应商`);
+      if (toRemove.length) parts.push(`移除 ${toRemove.length} 个供应商`);
+      if (providersNeedingAccountBinding.length) parts.push(`更新 ${providersNeedingAccountBinding.length} 个供应商的账号绑定`);
+      toast("success", parts.join("，") || "已保存");
       setProviderDraft([]);
       setAccountDraft({});
       setShowMembers(false);
     } catch (error) {
-      toast("error", `添加厂商模型供应商失败：${String(error)}`);
+      toast("error", `保存失败：${String(error)}`);
+    }
+  };
+
+  const handleClearPool = async () => {
+    if (!selected) return;
+    if (!window.confirm("确定清空路由池中所有已绑定的模型供应商？此操作不可撤销。")) return;
+    try {
+      await clearGroupModels.mutateAsync({ groupId: selected, resources: [] });
+      toast("success", "路由池已清空");
+      setProviderDraft([]);
+      setAccountDraft({});
+    } catch (error) {
+      toast("error", `清空失败：${String(error)}`);
     }
   };
 
@@ -902,6 +1111,193 @@ export default function RoutePools() {
     } catch (error) {
       toast("error", `绑定失败：${String(error)}`);
     }
+  };
+
+  // 左栏供应商行：勾选（checkbox）与聚焦（行主体）分离，行高固定，状态 chip 固定在行尾。
+  const renderProviderRow = (entry: (typeof providerEntries)[number]) => {
+    const { providerId, providerName, modelCount, accountCount, healthyCount } = entry;
+    const checked = providerDraft.includes(providerId);
+    const isCustom = customProviderIds.has(providerId);
+    const inPool = currentPoolProviders.has(providerId);
+    const focused = focusedProviderId === providerId;
+    const allHealthy = accountCount > 0 && healthyCount === accountCount;
+    const healthTone = accountCount === 0
+      ? "text-[var(--text-dim)]"
+      : allHealthy ? "text-[var(--color-ok)]" : "text-[var(--color-warn)]";
+    return (
+      <div
+        key={providerId}
+        className={`group relative flex items-center rounded-lg transition-colors duration-150 ${focused ? "bg-[var(--bg-hover)]" : "hover:bg-[var(--bg-hover)]"}`}
+      >
+        {focused && <span className="absolute left-0 top-1.5 bottom-1.5 w-[2.5px] rounded-full bg-[var(--color-brand)]" />}
+        <button
+          type="button"
+          aria-label={checked ? `移除 ${providerName}` : `加入 ${providerName}`}
+          onClick={() => handleToggleProvider(providerId)}
+          className="flex h-[52px] w-9 shrink-0 cursor-pointer items-center justify-center"
+        >
+          <span className={`flex h-[16px] w-[16px] items-center justify-center rounded-[5px] border-[1.5px] transition-colors duration-150 ${checked ? "border-[var(--color-brand)] bg-[var(--color-brand)] text-white" : "border-[var(--border-strong)] group-hover:border-[var(--color-brand)]/70"}`}>
+            {checked && <Check size={11} strokeWidth={3} />}
+          </span>
+        </button>
+        <button
+          type="button"
+          onClick={() => setFocusedProviderId(providerId)}
+          className="flex h-[52px] min-w-0 flex-1 cursor-pointer items-center gap-2 pr-2.5 text-left"
+        >
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-1.5">
+              <span className={`truncate text-[13px] font-medium ${checked ? "text-[var(--color-brand)]" : "text-[var(--text-primary)]"}`}>{providerName}</span>
+              {inPool && <span className="shrink-0 rounded border border-[var(--border-default)] px-1 text-[10px] leading-4 text-[var(--text-dim)]">池内</span>}
+              {isCustom && !inPool && <span className="shrink-0 text-[10px] leading-4 text-[var(--text-dim)]">自定义</span>}
+            </div>
+            <div className="mt-0.5 flex items-center gap-1.5 text-[11px] leading-4 text-[var(--text-dim)]">
+              <span className="pg-mono">{modelCount}</span><span>模型</span>
+              <span className="opacity-50">·</span>
+              <span className={`pg-mono ${healthTone}`}>{healthyCount}/{accountCount}</span><span>健康</span>
+            </div>
+          </div>
+          {inPool && !checked
+            ? <span className="shrink-0 rounded bg-[var(--color-warn)]/12 px-1.5 py-0.5 text-[10px] font-medium text-[var(--color-warn)]">将移除</span>
+            : !inPool && checked
+              ? <span className="shrink-0 rounded bg-[var(--color-brand)]/12 px-1.5 py-0.5 text-[10px] font-medium text-[var(--color-brand)]">将加入</span>
+              : <ChevronRight size={13} className={`shrink-0 text-[var(--text-dim)] transition-opacity duration-150 ${focused ? "opacity-100 text-[var(--color-brand)]" : "opacity-0 group-hover:opacity-100"}`} />}
+        </button>
+      </div>
+    );
+  };
+
+  // 右栏：聚焦供应商 — 标题 + 状态 Pill + 三张 KPI 卡片 + 账号列表。
+  // 「是否入池」是单一信号源：左侧多选框 + 右侧 Pill，颜色和文案一起表达「现状 / 将要发生」。
+  // 顶部不再放重复的"加入/保留在池"按钮，避免与左侧 checkbox 形成两条路径。
+  const renderFocusedDetail = () => {
+    if (!focusedEntry) {
+      return (
+        <div className="flex h-full flex-col items-center justify-center py-16 text-center">
+          <PanelRightOpen size={24} className="mb-3 text-[var(--text-dim)]" />
+          <div className="text-[13px] text-[var(--text-secondary)]">在左侧选择一个供应商</div>
+          <div className="mt-1 text-[11px] text-[var(--text-dim)]">查看模型、账号健康状态，并配置参与调度的账号</div>
+        </div>
+      );
+    }
+    const { providerId, providerName, modelCount, accountCount, healthyCount, accounts } = focusedEntry;
+    const checked = providerDraft.includes(providerId);
+    const inPool = currentPoolProviders.has(providerId);
+    const isCustom = customProviderIds.has(providerId);
+    const draftIds = accountDraft[providerId];
+    const allRoutableIds = accounts.filter((a) => a.routable).map((a) => a.id);
+    const selectedAccountIds = draftIds !== undefined ? new Set(draftIds) : new Set(allRoutableIds);
+    const healthyRate = accountCount === 0 ? 0 : Math.round((healthyCount / accountCount) * 100);
+    const rateTone = accountCount === 0
+      ? "var(--text-dim)"
+      : healthyRate >= 100 ? "var(--color-ok)"
+      : healthyRate >= 60  ? "var(--color-warn)"
+      : "var(--color-err)";
+    const poolState = !checked && inPool
+      ? { variant: "warn" as const, text: "将移除" }
+      : checked && !inPool
+        ? { variant: "brand" as const, text: "将加入" }
+        : checked
+          ? { variant: "ok" as const, text: "已在池内" }
+          : { variant: "mute" as const, text: "未入池" };
+    return (
+      <div className="flex h-full min-h-0 flex-col">
+        {/* 标题区：名称 + 自定义 + 状态 Pill */}
+        <div className="flex items-center justify-between gap-3 pb-2">
+          <div className="flex min-w-0 items-center gap-1.5">
+            <h3 className="truncate text-[15px] font-semibold tracking-[-0.01em] text-[var(--text-primary)]">{providerName}</h3>
+            {isCustom && <Badge variant="info" className="!text-[10px]">自定义</Badge>}
+          </div>
+          <Badge variant={poolState.variant} dot className="!text-[10.5px]">{poolState.text}</Badge>
+        </div>
+
+        {/* 1 行 KPI：模型 · 账号 · 健康率 */}
+        <div
+          className="flex items-center divide-x rounded-md border"
+          style={{ borderColor: "var(--border-default)", background: "var(--bg-surface)" }}
+        >
+          <div className="flex flex-1 items-center gap-2 px-3 py-1.5">
+            <Layers3 size={12} className="text-[var(--text-dim)]" />
+            <span className="pg-eyebrow">模型</span>
+            <span className="ml-auto pg-mono text-[15px] font-semibold leading-none text-[var(--text-primary)]">{modelCount}</span>
+          </div>
+          <div className="flex flex-1 items-center gap-2 px-3 py-1.5">
+            <Users size={12} className="text-[var(--text-dim)]" />
+            <span className="pg-eyebrow">账号</span>
+            <span className="ml-auto pg-mono text-[15px] font-semibold leading-none text-[var(--text-primary)]">
+              {accountCount === 0 ? "—" : `${selectedAccountIds.size}/${accountCount}`}
+            </span>
+          </div>
+          <div className="flex flex-1 items-center gap-2 px-3 py-1.5">
+            <ShieldCheck size={12} style={{ color: rateTone }} />
+            <span className="pg-eyebrow">健康率</span>
+            <span className="ml-auto pg-mono text-[15px] font-semibold leading-none" style={{ color: rateTone }}>
+              {accountCount === 0 ? "—" : `${healthyRate}%`}
+            </span>
+          </div>
+        </div>
+
+        {/* 账号配置 */}
+        {accounts.length === 0 ? (
+          <div className="mt-4 flex flex-1 flex-col items-center justify-center rounded-md border border-dashed py-8 text-center" style={{ borderColor: "var(--border-default)" }}>
+            <Users size={20} className="mb-2 text-[var(--text-dim)]" />
+            <div className="text-[12px] text-[var(--text-secondary)]">该供应商暂无可路由账号</div>
+            <div className="mt-1 text-[11px] text-[var(--text-dim)]">请先在「模型供应商」页面对其配置账号</div>
+          </div>
+        ) : (
+          <div className="mt-3 flex min-h-0 flex-1 flex-col">
+            <div className="mb-1.5 flex shrink-0 items-center justify-between gap-2">
+              <div className="flex items-center gap-1.5">
+                <span className="text-[12px] font-medium text-[var(--text-secondary)]">参与调度的账号</span>
+                <span className="pg-mono text-[10.5px] text-[var(--text-dim)]">{selectedAccountIds.size}/{allRoutableIds.length}</span>
+              </div>
+              {checked ? (
+                <div className="flex items-center gap-1">
+                  {(["全选", "仅健康", "重置"] as const).map((label) => (
+                    <button
+                      key={label}
+                      type="button"
+                      className="h-6 cursor-pointer rounded-md border border-[var(--border-default)] px-2 text-[10.5px] text-[var(--text-secondary)] transition-colors duration-150 hover:border-[var(--color-brand)]/50 hover:bg-[var(--color-brand-subtle)] hover:text-[var(--color-brand)]"
+                      onClick={() => {
+                        if (label === "全选") selectAllAccounts(providerId);
+                        else if (label === "仅健康") selectAllHealthyAccounts(providerId);
+                        else restoreAccountSelection(providerId);
+                      }}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <span className="text-[10.5px] text-[var(--text-dim)]">勾选供应商后可调整选择范围</span>
+              )}
+            </div>
+            <div className={`min-h-0 flex-1 space-y-1 overflow-y-auto pr-1 ${checked ? "" : "pointer-events-none opacity-50"}`}>
+              {accounts.map((account) => {
+                const isChecked = selectedAccountIds.has(account.id);
+                const isHealthy = account.routable && !["error", "exhausted", "token_expired"].includes(account.status);
+                return (
+                  <label
+                    key={account.id}
+                    title={account.email || account.name}
+                    className={`flex h-[36px] cursor-pointer items-center gap-2.5 rounded-md border px-2.5 transition-colors duration-150 ${isChecked ? "border-[var(--color-brand)]/40 bg-[var(--color-brand-subtle)]/40" : "border-transparent hover:bg-[var(--bg-hover)]"} ${!account.routable ? "cursor-not-allowed opacity-40" : ""}`}
+                  >
+                    <span className={`flex h-[13px] w-[13px] shrink-0 items-center justify-center rounded-[4px] border-[1.5px] transition-colors ${isChecked ? "border-[var(--color-brand)] bg-[var(--color-brand)] text-white" : "border-[var(--border-strong)]"}`}>
+                      {isChecked && <Check size={9} strokeWidth={3.5} />}
+                    </span>
+                    <input type="checkbox" className="sr-only" checked={isChecked} disabled={!account.routable || !checked} onChange={() => handleToggleAccount(providerId, account.id)} />
+                    <div className="min-w-0 flex-1 truncate text-[12px] text-[var(--text-primary)]">{account.name}</div>
+                    <Badge variant={isHealthy ? "ok" : "err"} dot className="!text-[10px]">
+                      {isHealthy ? "健康" : "异常"}
+                    </Badge>
+                  </label>
+                );
+              })}
+            </div>
+          </div>
+        )}
+      </div>
+    );
   };
 
   const totalActiveResources = accounts.filter((account) => account.status !== "disabled" && ["api_key", "upstream_key", "oauth", "token", "codex_oauth"].includes(account.credential_type || "api_key")).length;
@@ -1049,84 +1445,153 @@ export default function RoutePools() {
         </div>
       </Modal>
 
-      <Modal open={showMembers && !!selectedGroup} onClose={() => { setShowMembers(false); setProviderDraft([]); }} title={`按厂商添加账号 · ${selectedGroup?.name || ""}`} className="max-w-3xl">
-        <div className="space-y-3">
-          <div className="flex flex-wrap items-center justify-between gap-3 text-[11px] text-[var(--text-dim)]">
-            <span>选择模型厂商后，将加入该厂商全部未入池的模型；下方可单独挑选账号。</span>
-            <div className="flex gap-1.5"><Badge variant="mute">池内 {groupModels.length}</Badge><Badge variant="brand">已选 {providerDraft.length} 厂商 / {selectedProviderResources.length} 模型</Badge></div>
+      <Modal
+        open={showMembers && !!selectedGroup}
+        onClose={() => {
+          setShowMembers(false);
+          setProviderDraft([]);
+          setAccountDraft({});
+          setProviderSearch("");
+          setProviderFilter("all");
+          setFocusedProviderId(null);
+        }}
+        title={`管理模型供应商 · ${selectedGroup?.name || ""}`}
+        className="!max-w-[1180px] !w-[calc(100vw-48px)]"
+        style={{ maxWidth: "min(1180px, calc(100vw - 48px))" }}
+        contentClassName="!p-0 flex flex-col overflow-hidden"
+      >
+        {/* 工具栏：一行说明 + 搜索 + 分段 + 全选 */}
+        <div className="shrink-0 px-5 pt-3.5 pb-3 border-b" style={{ borderColor: "var(--border-default)" }}>
+          <p className="text-[11.5px] leading-5 text-[var(--text-dim)] flex items-start gap-1.5">
+            <Layers3 size={12} className="mt-[2px] shrink-0 text-[var(--color-brand)]" />
+            勾选供应商加入「{selectedGroup?.name}」后可自动继承其全部模型，右侧可调整参与调度的账号。
+          </p>
+          <div className="mt-2.5 flex items-center gap-2">
+            <div className="relative min-w-0 flex-1">
+              <Search size={13} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--text-dim)]" />
+              <input
+                type="text"
+                placeholder="搜索供应商名称..."
+                value={providerSearch}
+                onChange={(e) => setProviderSearch(e.target.value)}
+                className="h-8 w-full rounded-md border bg-[var(--bg-inset)] pr-3 text-[12px] text-[var(--text-primary)] outline-none transition-colors placeholder:text-[var(--text-dim)] focus:border-[var(--color-brand)] focus:ring-2 focus:ring-[var(--color-brand)]/25"
+                style={{ borderColor: "var(--border-default)", paddingLeft: "30px" }}
+              />
+            </div>
+            <Segmented
+              value={providerFilter}
+              onChange={setProviderFilter}
+              options={[
+                { value: "all", label: `全部 ${providerEntries.length}` },
+                { value: "in_pool", label: `池内 ${currentPoolProviders.size}` },
+                { value: "custom", label: `自定义 ${customProviderEntries.length}` },
+              ]}
+            />
+            <button
+              type="button"
+              onClick={selectVisibleProviders}
+              disabled={!visibleUncheckedCount}
+              className="flex h-8 shrink-0 cursor-pointer items-center gap-1 rounded-md border border-[var(--border-default)] px-2.5 text-[11px] font-medium text-[var(--text-secondary)] transition-colors duration-150 hover:border-[var(--color-brand)]/50 hover:bg-[var(--color-brand-subtle)] hover:text-[var(--color-brand)] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-[var(--text-secondary)]"
+            >
+              <Check size={11} />
+              全选
+            </button>
           </div>
-          <div className="max-h-[440px] space-y-2 overflow-y-auto rounded-lg border p-2" style={{ borderColor: "var(--border-subtle)" }}>
+        </div>
+        {/* 主体：左栏供应商列表 + 右栏聚焦详情 */}
+        <div className="flex min-h-0 flex-1 overflow-hidden">
+          <div className="w-[280px] shrink-0 overflow-y-auto overflow-x-hidden border-r py-1.5" style={{ borderColor: "var(--border-default)" }}>
             {availableModelsLoading ? (
-              <div className="flex items-center justify-center gap-2 py-12 text-sm text-[var(--text-dim)]"><Spinner size={18} /> 正在加载可用厂商...</div>
+              <div className="flex items-center justify-center gap-2.5 py-20 text-[12px] text-[var(--text-dim)]"><Spinner size={18} /> 正在加载供应商...</div>
             ) : availableModelsError ? (
-              <div className="flex flex-col items-center justify-center py-12 text-center"><div className="text-sm text-[var(--color-err)]">可用厂商加载失败</div><Button className="mt-3" size="sm" variant="outline" onClick={() => refetchAvailableModels()}><RefreshCw size={12} /> 重试</Button></div>
-            ) : accountsByProvider.length ? accountsByProvider.map(({ providerId, providerName, accounts }) => {
-              const info = providerAccountSelection[providerId];
-              const availableModels = modelResourcesByProvider.find(([id]) => id === providerId)?.[1] || [];
-              const availableCount = availableModels.filter((resource) => !resource.already_added).length;
-              const addedCount = availableModels.length - availableCount;
-              const totalAccounts = accounts.length;
-              const healthyCount = info.healthy.length;
-              const checked = providerDraft.includes(providerId);
-              const draftIds = accountDraft[providerId];
-              const selectedIds = draftIds !== undefined ? new Set(draftIds) : info.selected;
-              const selectedCount = selectedIds.size;
-              const hasSelection = draftIds !== undefined;
-              return (
-                <div
-                  key={providerId}
-                  className={`rounded-xl border p-3 transition-all ${checked ? "border-[var(--color-brand)] bg-[var(--color-brand-subtle)]/40" : "border-[var(--border-subtle)] bg-[var(--bg-elevated)]"}`}
-                >
-                  <button
-                    type="button"
-                    disabled={!availableCount}
-                    onClick={() => handleToggleProvider(providerId, availableCount)}
-                    className="flex w-full items-start gap-3 text-left disabled:cursor-default disabled:opacity-65"
-                  >
-                    <span className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-md border ${!availableCount ? "border-[var(--color-ok)] bg-[var(--color-ok-subtle)] text-[var(--color-ok)]" : checked ? "border-[var(--color-brand)] bg-[var(--color-brand)] text-white" : "border-[var(--border-strong)]"}`}>{(!availableCount || checked) && <Check size={12} />}</span>
-                    <div className="min-w-0 flex-1">
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <div><div className="text-[12px] font-semibold text-[var(--text-primary)]">{providerName}</div><div className="mt-0.5 text-[9px] text-[var(--text-dim)]">{totalAccounts} 个账号 · {healthyCount} 个健康 · {availableModels.length} 个模型</div></div>
-                        <div className="flex gap-1.5"><Badge variant={availableCount ? "brand" : "ok"}>{availableCount ? `${availableCount} 个待加入` : "已全部加入"}</Badge>{addedCount > 0 && availableCount > 0 && <Badge variant="mute">已加入 {addedCount}</Badge>}</div>
-                      </div>
-                    </div>
-                  </button>
-                  <div className="mt-3 space-y-2">
-                    <div className="flex items-center justify-between gap-2 text-[9px]">
-                      <span className="text-[var(--text-dim)]">{hasSelection ? `已选 ${selectedCount}/${totalAccounts} 个账号` : "未调整账号选择，加入该厂商全部可路由账号"}</span>
-                      <div className="flex gap-2">
-                        <button type="button" className="text-[var(--color-brand)] hover:underline" onClick={() => selectAllHealthyAccounts(providerId)}>全选健康</button>
-                        <button type="button" className="text-[var(--text-dim)] hover:underline" onClick={() => clearAccountSelection(providerId)}>清空选择</button>
-                      </div>
-                    </div>
-                    <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
-                      {accounts.map(({ account, models }) => {
-                        const isChecked = selectedIds.has(account.id);
-                        const isHealthy = account.routable && !["error", "exhausted", "token_expired"].includes(account.status);
-                        return (
-                          <label key={account.id} className={`flex cursor-pointer flex-col gap-1.5 rounded-md border px-2.5 py-2 transition-colors ${isChecked ? "border-[var(--color-brand)] bg-[var(--color-brand-subtle)]/60" : "border-[var(--border-subtle)] bg-[var(--bg-elevated)]"} ${!account.routable ? "opacity-60" : ""}`}>
-                            <div className="flex items-center gap-2">
-                              <input type="checkbox" checked={isChecked} disabled={!account.routable} onChange={() => toggleAccountSelection(providerId, account.id)} />
-                              <span className="min-w-0 flex-1"><span className="block truncate text-[10px] font-medium text-[var(--text-primary)]">{account.name}</span><span className="block truncate text-[8px] text-[var(--text-dim)]">{account.email || account.id}</span></span>
-                              <Badge variant={isHealthy ? "ok" : "err"}>{account.health_status === "error" ? "健康异常" : account.status}</Badge>
-                            </div>
-                            <div className="flex flex-wrap gap-1 pl-6">
-                              {models.slice(0, 3).map((model) => <span key={model} className="rounded bg-[var(--bg-inset)] px-1.5 py-0.5 text-[8px] text-[var(--text-secondary)]">{model}</span>)}
-                              {models.length > 3 && <span className="rounded bg-[var(--bg-inset)] px-1.5 py-0.5 text-[8px] text-[var(--text-dim)]">+{models.length - 3}</span>}
-                            </div>
-                          </label>
-                        );
-                      })}
-                    </div>
-                  </div>
+              <div className="flex flex-col items-center justify-center py-20 text-center px-4">
+                <div className="text-[12px] text-[var(--color-err)]">可用供应商加载失败</div>
+                <Button className="mt-3" size="sm" variant="outline" onClick={() => refetchAvailableModels()}><RefreshCw size={12} /> 重试</Button>
+              </div>
+            ) : visibleProviderEntries.length ? (
+              <>
+                <div className="px-2 pb-1 pt-0.5 text-[10px] tracking-wide text-[var(--text-dim)] flex items-center justify-between">
+                  <span className="pg-eyebrow">供应商 · {visibleProviderEntries.length}</span>
+                  {providerSearch.trim() && <span className="text-[var(--color-brand)]">搜索匹配</span>}
                 </div>
-              );
-            }) : (
-              <div className="flex flex-col items-center justify-center py-12 text-center"><Box size={22} className="mb-2 text-[var(--text-dim)]" /><div className="text-sm text-[var(--text-secondary)]">没有与当前协议兼容的可路由厂商</div><div className="mt-1 text-[10px] text-[var(--text-dim)]">OpenAI compatible 号池支持 Chat Completions 与 Responses 厂商。</div></div>
+                <div className="space-y-0.5">
+                  {visibleProviderEntries.map(renderProviderRow)}
+                </div>
+              </>
+            ) : providerEntries.length ? (
+              <div className="flex flex-col items-center py-16 text-center px-4">
+                <Search size={20} className="mb-3 text-[var(--text-dim)]" />
+                <div className="text-[12px] text-[var(--text-secondary)]">未找到匹配「{providerSearch}」的供应商</div>
+                <div className="mt-1 text-[11px] text-[var(--text-dim)]">试试其他关键词或切换筛选</div>
+              </div>
+            ) : (
+              <div className="flex flex-col items-center justify-center py-20 text-center px-4">
+                <Box size={24} className="mb-3 text-[var(--text-dim)]" />
+                <div className="text-[12px] text-[var(--text-secondary)]">没有与当前协议兼容的供应商</div>
+                <div className="mt-1 text-[11px] text-[var(--text-dim)]">请先在「模型供应商」页面接入并配置 API Key 或账号。</div>
+              </div>
             )}
           </div>
-          <div className="rounded-lg bg-[var(--color-warn-bg)] px-3 py-2 text-[10px] text-[var(--color-warn)]">部分模型已入池时，仅补齐该厂商剩余模型。空号池会返回 POOL_EMPTY，不会回退全量账号。</div>
-          <div className="flex justify-end gap-2"><Button variant="ghost" onClick={() => { setShowMembers(false); setProviderDraft([]); setAccountDraft({}); }}><X size={13} /> 取消</Button><Button onClick={handleAddProviders} loading={addGroupModels.isPending || setGroupModelAccounts.isPending} disabled={!selectedProviderResources.length}><Plus size={13} /> 加入模型并保存账号</Button></div>
+          <div className="min-w-0 flex-1 overflow-x-hidden overflow-y-auto p-4">
+            {renderFocusedDetail()}
+          </div>
+        </div>
+        {/* 底部：变更摘要 + 清空 + 取消 + 保存 */}
+        <div className="flex shrink-0 items-center justify-between gap-3 border-t px-5 py-3" style={{ borderColor: "var(--border-default)", background: "var(--bg-elevated)" }}>
+          <div className="flex min-w-0 items-center gap-2.5 text-[11px] text-[var(--text-dim)]">
+            {providerDraft.length > 0 ? (
+              <>
+                <span>已选 <span className="font-semibold text-[var(--text-primary)]">{providerDraft.length}</span> 个供应商</span>
+                {pendingAddCount > 0 && (
+                  <span className="inline-flex items-center gap-1 text-[var(--color-ok)]">
+                    <span className="h-1 w-1 rounded-full bg-[var(--color-ok)]" />
+                    加入 {pendingAddCount}
+                  </span>
+                )}
+                {pendingRemoveCount > 0 && (
+                  <span className="inline-flex items-center gap-1 text-[var(--color-warn)]">
+                    <span className="h-1 w-1 rounded-full bg-[var(--color-warn)]" />
+                    移除 {pendingRemoveCount}
+                  </span>
+                )}
+                <button
+                  type="button"
+                  onClick={handleClearPool}
+                  disabled={!groupModels.length}
+                  className="ml-1 inline-flex h-7 cursor-pointer items-center gap-1 rounded-md px-2 text-[11px] text-[var(--color-err)]/80 transition-colors duration-150 hover:bg-[var(--color-err-bg)] hover:text-[var(--color-err)] disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  <Trash2 size={11} />
+                  清空池
+                </button>
+              </>
+            ) : currentPoolProviders.size > 0 ? (
+              <>
+                <span>池内 {currentPoolProviders.size} 个供应商，未勾选任何供应商</span>
+                <button
+                  type="button"
+                  onClick={handleClearPool}
+                  disabled={!groupModels.length}
+                  className="ml-1 inline-flex h-7 cursor-pointer items-center gap-1 rounded-md px-2 text-[11px] text-[var(--color-err)]/80 transition-colors duration-150 hover:bg-[var(--color-err-bg)] hover:text-[var(--color-err)] disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  <Trash2 size={11} />
+                  清空池
+                </button>
+              </>
+            ) : (
+              <span>未选择任何供应商</span>
+            )}
+          </div>
+          <div className="flex shrink-0 items-center gap-1.5">
+            <Button variant="secondary" onClick={() => {
+              setShowMembers(false);
+              setProviderDraft([]);
+              setAccountDraft({});
+              setProviderSearch("");
+              setProviderFilter("all");
+              setFocusedProviderId(null);
+            }}>取消</Button>
+            <Button size="lg" onClick={handleAddProviders} loading={addGroupModels.isPending || removeGroupModel.isPending || setGroupModelAccounts.isPending} disabled={!providerDraft.length && !currentPoolProviders.size}><Check size={14} /> 保存更改</Button>
+          </div>
         </div>
       </Modal>
 

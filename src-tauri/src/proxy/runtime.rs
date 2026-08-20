@@ -116,11 +116,11 @@ impl GatewayRuntime {
     /// Record a request connection being closed. Matches `connection_opened()`
     /// for manually-managed (streaming) connections.
     pub fn connection_closed(&self) {
-        let _ = self.active_connections.fetch_update(
-            Ordering::Relaxed,
-            Ordering::Relaxed,
-            |value| Some(value.saturating_sub(1)),
-        );
+        let _ =
+            self.active_connections
+                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+                    Some(value.saturating_sub(1))
+                });
         self.publish_delta(Vec::new());
     }
 
@@ -369,14 +369,28 @@ mod tests {
     #[test]
     fn active_routes_are_aggregated_and_completed() {
         let runtime = GatewayRuntime::default();
+        // Paths aggregate per account (the topology has a provider→account
+        // layer): two concurrent requests on one account roll up to 2.
         runtime.select_route("req-1", "chat", "pool-1", "provider-1", "account-1", 1);
-        runtime.select_route("req-2", "chat", "pool-1", "provider-1", "account-2", 1);
+        runtime.select_route("req-2", "chat", "pool-1", "provider-1", "account-1", 1);
         assert_eq!(runtime.active_paths()[0].active_requests, 2);
         runtime.complete_route("req-1", "success", 42);
         assert_eq!(runtime.active_paths()[0].active_requests, 1);
         let route = runtime.latest_route().unwrap();
         assert_eq!(route.status, "success");
         assert_eq!(route.latency_ms, Some(42));
+    }
+
+    #[test]
+    fn active_paths_stay_per_account() {
+        // Concurrent requests on different accounts of the same provider keep
+        // separate per-account paths instead of merging into one.
+        let runtime = GatewayRuntime::default();
+        runtime.select_route("req-1", "chat", "pool-1", "provider-1", "account-1", 1);
+        runtime.select_route("req-2", "chat", "pool-1", "provider-1", "account-2", 1);
+        let paths = runtime.active_paths();
+        assert_eq!(paths.len(), 2);
+        assert!(paths.iter().all(|path| path.active_requests == 1));
     }
 
     #[test]

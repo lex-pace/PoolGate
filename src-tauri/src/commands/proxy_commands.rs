@@ -1,3 +1,4 @@
+use crate::proxy::server::ListenMode;
 use crate::{AppState, ProxyHandle};
 use std::sync::Arc;
 use tauri::State;
@@ -8,6 +9,10 @@ pub struct ProxyStatus {
     pub running: bool,
     pub port: u16,
     pub active_connections: u32,
+    /// Listen mode of the running server: "localhost" or "lan".
+    pub listen_mode: String,
+    /// Host the server binds to (127.0.0.1 / 0.0.0.0).
+    pub listen_host: String,
 }
 
 /// Default port the proxy binds to. Kept here (not AppState) so the
@@ -28,6 +33,10 @@ pub async fn start_proxy(state: State<'_, Arc<AppState>>) -> Result<(), String> 
 }
 
 pub async fn start_proxy_with_state(app_state: Arc<AppState>) -> Result<(), String> {
+    if crate::commands::settings_commands::is_monitor_mode(&app_state)? {
+        return Err("Monitor 模式已禁用 Gateway，无法启动代理".to_string());
+    }
+
     // ── Refuse double start ────────────────────────────────────────────
     {
         let guard = app_state.proxy.lock().map_err(|e| e.to_string())?;
@@ -68,6 +77,12 @@ pub async fn start_proxy_with_state(app_state: Arc<AppState>) -> Result<(), Stri
     let loaded = crate::services::keychain::preload_account_secrets(&account_secret_refs)?;
     tracing::info!("Loaded {} account credential(s) into runtime cache", loaded);
 
+    // Resolve the listen mode from settings (localhost default). The server
+    // binds once at startup; switching the setting restarts the server.
+    let listen_mode = ListenMode::from_setting(
+        &crate::commands::settings_commands::get_listen_addr(&app_state)?,
+    );
+
     // ── Allocate shutdown channel and store the sender ─────────────────
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
     {
@@ -75,6 +90,7 @@ pub async fn start_proxy_with_state(app_state: Arc<AppState>) -> Result<(), Stri
         *guard = Some(ProxyHandle {
             shutdown_tx,
             port: DEFAULT_PROXY_PORT,
+            listen_mode,
         });
     }
 
@@ -84,6 +100,7 @@ pub async fn start_proxy_with_state(app_state: Arc<AppState>) -> Result<(), Stri
         let result = crate::proxy::server::start_proxy_server(
             state_for_task.clone(),
             DEFAULT_PROXY_PORT,
+            listen_mode,
             shutdown_rx,
         )
         .await;
@@ -152,11 +169,46 @@ pub fn get_proxy_status(state: State<'_, Arc<AppState>>) -> Result<ProxyStatus, 
             running: true,
             port: h.port,
             active_connections: state.inner().gateway_runtime.active_connections(),
+            listen_mode: h.listen_mode.as_str().to_string(),
+            listen_host: h.listen_mode.bind_host().to_string(),
         }),
-        None => Ok(ProxyStatus {
-            running: false,
-            port: DEFAULT_PROXY_PORT,
-            active_connections: 0,
-        }),
+        None => {
+            // Not running — still report the configured mode so the UI can
+            // show the address the gateway would bind to once started.
+            let listen_mode = ListenMode::from_setting(
+                &crate::commands::settings_commands::get_listen_addr(state.inner())?,
+            );
+            Ok(ProxyStatus {
+                running: false,
+                port: DEFAULT_PROXY_PORT,
+                active_connections: 0,
+                listen_mode: listen_mode.as_str().to_string(),
+                listen_host: listen_mode.bind_host().to_string(),
+            })
+        }
     }
+}
+
+/// Enumerate this machine's non-loopback IPv4 LAN addresses, sorted and
+/// de-duplicated. Shared by the settings page (显示同事访问地址) and the tray
+/// right-click menu (一键复制入口).
+pub fn lan_ipv4_addresses() -> Result<Vec<String>, String> {
+    let mut ips: Vec<String> = local_ip_address::list_afinet_netifas()
+        .map_err(|error| format!("无法枚举局域网地址: {}", error))?
+        .into_iter()
+        .filter_map(|(_, ip)| match ip {
+            std::net::IpAddr::V4(v4) if !v4.is_loopback() => Some(v4.to_string()),
+            _ => None,
+        })
+        .collect();
+    ips.sort();
+    ips.dedup();
+    Ok(ips)
+}
+
+/// Enumerate this machine's non-loopback IPv4 LAN addresses so the settings
+/// page can show teammates exactly which endpoint to configure on their side.
+#[tauri::command]
+pub fn get_lan_addresses() -> Result<Vec<String>, String> {
+    lan_ipv4_addresses()
 }

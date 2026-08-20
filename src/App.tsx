@@ -2,13 +2,19 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import type { LucideIcon } from "lucide-react";
 import { ToastProvider } from "@/components/ui/Toast";
+import TokenMonitorAlerts from "@/components/token-monitor/TokenMonitorAlerts";
 import { GlobalSearch } from "@/components/ui/GlobalSearch";
 import {
   useLogStats,
   useProxyStatus,
   useStartProxy,
   useStopProxy,
+  useOnboardingState,
+  useSetOnboardingCompleted,
+  useAppMode,
 } from "@/hooks/use-tauri";
+import Wizard from "@/pages/Wizard";
+import { ModeSelectionScreen } from "@/components/AppMode";
 import {
   Activity,
   BarChart3,
@@ -37,8 +43,9 @@ const Analytics = lazy(() => import("@/pages/Analytics"));
 const SettingsPage = lazy(() => import("@/pages/Settings"));
 const AppLogs = lazy(() => import("@/pages/AppLogs"));
 const TopologyFullscreenPage = lazy(() => import("@/pages/TopologyFullscreen"));
+const TokenMonitorPage = lazy(() => import("@/pages/TokenMonitor"));
 
-type Page = "dashboard" | "resources" | "groups" | "logs" | "analytics" | "settings" | "applog";
+type Page = "dashboard" | "resources" | "groups" | "logs" | "analytics" | "tokenmonitor" | "settings" | "applog";
 
 interface NavItem {
   id: Page;
@@ -54,7 +61,7 @@ const navItems: NavItem[] = [
   { id: "resources", label: "模型供应商", shortLabel: "供应商", description: "Coding Plan、免费模型与自定义接口", icon: Layers3, section: "resources" },
   { id: "groups", label: "路由池", shortLabel: "路由池", description: "按模型能力组池、调度与故障转移", icon: FolderKanban, section: "resources" },
   { id: "logs", label: "请求日志", shortLabel: "日志", description: "实时请求与错误追踪", icon: FileText, section: "observability" },
-  { id: "analytics", label: "用量分析", shortLabel: "分析", description: "吞吐、延迟与成本趋势", icon: BarChart3, section: "observability" },
+  { id: "analytics", label: "用量分析", shortLabel: "分析", description: "网关吞吐、延迟与成本趋势", icon: BarChart3, section: "observability" },
 ];
 
 const sectionLabels: Record<NavItem["section"], string> = {
@@ -99,7 +106,7 @@ function AppShell() {
     const unlistenPromise = listen<string>("tray:navigate", ({ payload }) => {
       // Payload may carry a topology node deep link: "dashboard?node=provider-xxx".
       const [pagePart, query] = payload.split("?", 2);
-      if (["dashboard", "resources", "groups", "logs", "analytics", "settings", "applog"].includes(pagePart)) {
+      if (["dashboard", "resources", "groups", "logs", "analytics", "tokenmonitor", "settings", "applog"].includes(pagePart)) {
         setPage(pagePart as Page);
         if (pagePart === "dashboard") {
           const node = query?.startsWith("node=") ? query.slice("node=".length) : undefined;
@@ -110,7 +117,7 @@ function AppShell() {
     // In-app navigation from topology empty states and settings entries.
     const handleCustomNavigate = (event: Event) => {
       const page = (event as CustomEvent<string>).detail;
-      if (["dashboard", "resources", "groups", "logs", "analytics", "settings", "applog"].includes(page)) {
+      if (["dashboard", "resources", "groups", "logs", "analytics", "tokenmonitor", "settings", "applog"].includes(page)) {
         setPage(page as Page);
       }
     };
@@ -154,19 +161,22 @@ function AppShell() {
   }, [handleToggleProxy]);
 
   const renderPage = () => {
-    const pages: Record<Page, ComponentType<{ focusNodeId?: string } | Record<string, never>>> = {
+    const pages: Record<Page, ComponentType<{ focusNodeId?: string; initialTab?: string; onInitialTabConsumed?: () => void } | Record<string, never>>> = {
       dashboard: Dashboard,
       resources: AccountPool,
       groups: AgentGroups,
       logs: Logs,
       applog: AppLogs,
       analytics: Analytics,
+      tokenmonitor: TokenMonitorPage,
       settings: SettingsPage,
     };
     const Page = pages[page];
     return (
       <Suspense fallback={<div className="pg-page-loading"><span className="pg-spinner" /></div>}>
-        <Page {...(page === "dashboard" ? { focusNodeId: topologyFocusNode } : {})} />
+        <Page
+          {...(page === "dashboard" ? { focusNodeId: topologyFocusNode } : {})}
+        />
       </Suspense>
     );
   };
@@ -274,7 +284,7 @@ function AppShell() {
 
         <section className="flex-1 min-w-0 flex flex-col overflow-hidden">
           <header
-            className="pg-toolbar h-[54px] flex items-center justify-between gap-4 px-4 border-b shrink-0"
+            className="pg-toolbar pg-desktop-toolbar h-[54px] flex items-center justify-between gap-4 px-4 border-b shrink-0"
             style={{ borderColor: "var(--border-default)" }}
             data-tauri-drag-region
           >
@@ -294,6 +304,20 @@ function AppShell() {
             </div>
 
             <div className="flex items-center gap-2">
+              <button
+                onClick={() => {
+                  window.location.hash = "#/token-monitor";
+                }}
+                className={`h-7 flex items-center gap-1.5 px-2.5 rounded-[7px] border text-[11px] font-medium transition-colors ${
+                  typeof window !== "undefined" && window.location.hash.startsWith("#/token-monitor")
+                    ? "border-[var(--color-brand)] text-[var(--color-brand)] bg-[var(--color-brand)]/10"
+                    : "border-[var(--color-brand)]/40 text-[var(--color-brand)] hover:bg-[var(--color-brand)]/10"
+                }`}
+                title="切换 PoolGate 桌面为 Token Monitor 仪表盘"
+              >
+                <Activity size={13} />
+                <span>Token Monitor</span>
+              </button>
               <button
                 onClick={() => setSearchOpen(true)}
                 className="h-7 w-[220px] flex items-center gap-2 px-2.5 rounded-[7px] border text-[11px] transition-colors hover:border-[var(--border-strong)]"
@@ -331,8 +355,8 @@ function AppShell() {
       </div>
 
       <footer
-        className="h-7 flex items-center justify-between px-3 border-t text-[10px] shrink-0"
-        style={{ background: "var(--bg-surface-solid)", borderColor: "var(--border-default)", color: "var(--text-dim)" }}
+        className="pg-desktop-statusbar h-7 flex items-center justify-between px-3 border-t text-[10px] shrink-0"
+        style={{ background: "var(--bg-page-solid)", borderColor: "var(--border-default)", color: "var(--text-dim)" }}
       >
         <div className="flex items-center gap-2.5">
           <span className="inline-flex items-center gap-1.5">
@@ -356,23 +380,99 @@ function AppShell() {
 }
 
 export default function App() {
-  // Standalone topology fullscreen layer: when the window hash is set to
-  // `#/topology-fullscreen` the entire app shell is replaced by a dedicated
-  // overlay so the four-layer topology occupies every pixel of the PoolGate
-  // window without the sidebar, KPI row, or sibling cards behind it.
+  // 首次启动引导：未完成（且没有账号+池）时全屏展示三步向导。
+  const { data: appMode, isLoading: appModeLoading } = useAppMode();
+  const { data: onboarding, isLoading: onboardingLoading } = useOnboardingState();
+  const setOnboardingCompleted = useSetOnboardingCompleted();
+  const [onboardingDismissed, setOnboardingDismissed] = useState(false);
+
+  // 已经建好账号+路由池的老用户不弹向导，静默标记完成。
+  useEffect(() => {
+    if (onboarding && !onboarding.completed && onboarding.account_count > 0 && onboarding.pool_count > 0) {
+      void setOnboardingCompleted.mutate(true);
+    }
+  }, [onboarding, setOnboardingCompleted]);
+
+  const showOnboarding =
+    appMode?.mode === "gateway" && !onboardingLoading && !!onboarding && !onboarding.completed && !onboardingDismissed;
+
+  // 两种全屏形态（通过 hash 切换，均不进侧边栏菜单）：
+  //  - `#/topology-fullscreen`：四层拓扑占满整窗（既有）
+  //  - `#/token-monitor`：Token Monitor 仪表盘 —— 切换 PoolGate 桌面的形态，
+  //    不含侧边栏/工具栏，顶部提供「返回 PoolGate」入口（用户决策）。
   const [topologyFullscreen, setTopologyFullscreen] = useState<boolean>(
     typeof window !== "undefined" && window.location.hash === "#/topology-fullscreen",
   );
+  const isMonitorMode = appMode?.mode === "monitor";
+  const [tmFullscreen, setTmFullscreen] = useState<boolean>(
+    isMonitorMode || (typeof window !== "undefined" && window.location.hash.startsWith("#/token-monitor")),
+  );
+  const [tmInitialTab, setTmInitialTab] = useState<string | undefined>(
+    typeof window !== "undefined"
+      ? /^#\/token-monitor\?tab=(.+)$/.exec(window.location.hash)?.[1] || undefined
+      : undefined,
+  );
+
   useEffect(() => {
-    const sync = () => setTopologyFullscreen(window.location.hash === "#/topology-fullscreen");
+    const sync = () => {
+      setTopologyFullscreen(window.location.hash === "#/topology-fullscreen");
+      const isTm = isMonitorMode || window.location.hash.startsWith("#/token-monitor");
+      setTmFullscreen(isTm);
+      if (isTm) {
+        const match = /^#\/token-monitor\?tab=(.+)$/.exec(window.location.hash);
+        setTmInitialTab(match?.[1] || undefined);
+      }
+    };
     window.addEventListener("hashchange", sync);
     sync();
     return () => window.removeEventListener("hashchange", sync);
+  }, [isMonitorMode]);
+
+  // 托盘深链：`tokenmonitor`（或 `tokenmonitor?tab=settings`）→ 切换为仪表盘形态。
+  // 放在 App 层保证两种形态下都生效（AppShell 卸载后其监听不失效）。
+  useEffect(() => {
+    const unlistenPromise = listen<string>("tray:navigate", ({ payload }) => {
+      const [pagePart, query] = payload.split("?", 2);
+      if (pagePart === "tokenmonitor") {
+        const tab = query?.startsWith("tab=") ? query.slice("tab=".length) : undefined;
+        window.location.hash = tab ? `#/token-monitor?tab=${tab}` : "#/token-monitor";
+      }
+    });
+    return () => {
+      void unlistenPromise.then((unlisten) => unlisten());
+    };
   }, []);
 
   return (
     <ToastProvider>
-      {topologyFullscreen ? (
+      {/* 额度/采集告警桥接：监听 token-monitor:alert → 系统通知（跨窗口去重）+ 应用内 Toast */}
+      <TokenMonitorAlerts />
+      {appModeLoading ? (
+        <div className="pg-app h-screen grid place-items-center"><span className="pg-spinner" /></div>
+      ) : !appMode?.selected ? (
+        <ModeSelectionScreen />
+      ) : showOnboarding ? (
+        <div className="pg-app h-screen flex flex-col overflow-hidden">
+          <div className="flex-1 min-h-0 overflow-auto">
+            <Wizard
+              onComplete={() => {
+                setOnboardingDismissed(true);
+                void setOnboardingCompleted.mutate(true);
+              }}
+            />
+          </div>
+        </div>
+      ) : tmFullscreen ? (
+        <Suspense fallback={<div className="pg-page-loading"><span className="pg-spinner" /></div>}>
+          <div className="pg-app h-screen flex flex-col overflow-hidden">
+            <TokenMonitorPage
+              initialTab={tmInitialTab}
+              onInitialTabConsumed={() => setTmInitialTab(undefined)}
+              onExit={isMonitorMode ? undefined : () => { window.location.hash = ""; }}
+            />
+          </div>
+        </Suspense>
+      ) : topologyFullscreen ? (
         <Suspense fallback={<div className="pg-page-loading"><span className="pg-spinner" /></div>}>
           <TopologyFullscreenPage />
         </Suspense>

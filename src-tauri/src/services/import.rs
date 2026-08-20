@@ -1296,8 +1296,7 @@ fn normalize_account(
     // Store the raw URL as-is; normalization only happens at routing/request time.
     let mut base_url = string_at(object, &["base_url", "api_base_url", "apiBaseUrl"])
         .or_else(|| {
-            credentials
-                .and_then(|map| string_at(map, &["base_url", "api_base_url", "apiBaseUrl"]))
+            credentials.and_then(|map| string_at(map, &["base_url", "api_base_url", "apiBaseUrl"]))
         })
         .or_else(|| string_at(object, &["apiBaseUrl"]))
         .unwrap_or_else(|| default_url)
@@ -1742,6 +1741,7 @@ fn resolve_provider_in_transaction(
     auto_create: bool,
 ) -> Result<(String, bool), String> {
     let provider_key = provider_identity_key(&account.provider_name);
+    let is_official = is_official_identity_key(&provider_key);
     let mut stmt = conn
         .prepare("SELECT id, name, protocols, base_urls, models FROM providers")
         .map_err(|e| e.to_string())?;
@@ -1757,7 +1757,44 @@ fn resolve_provider_in_transaction(
         })
         .map_err(|e| e.to_string())?
         .filter_map(Result::ok)
-        .find(|(_, name, _, _, _)| provider_identity_key(name) == provider_key);
+        .find(|(id, name, _, base_urls, _)| {
+            let same_key = provider_identity_key(name) == provider_key;
+            if !same_key {
+                return false;
+            }
+            // Known official upstreams (openai/anthropic/google/antigravity/xai)
+            // are intended to be a single shared row per upstream. Custom /
+            // user-defined providers must only be reused when BOTH name and
+            // Base URL match — otherwise distinct custom providers that happen
+            // to share a generic name ("custom", "自定义", empty default…)
+            // would be collapsed into one row and have their Base URL / API
+            // key rewritten for every attached account.
+            if is_official {
+                return true;
+            }
+            let existing_url = base_urls
+                .as_deref()
+                .and_then(|raw| serde_json::from_str::<HashMap<String, String>>(raw).ok())
+                .and_then(|urls| urls.values().next().cloned())
+                .unwrap_or_default();
+            let incoming_url = account
+                .base_urls
+                .values()
+                .next()
+                .cloned()
+                .unwrap_or_else(|| account.base_url.clone());
+            // Preserve the historical "don't overwrite a configured URL with an
+            // empty/default one" behaviour: an empty incoming URL is treated as
+            // a match (so we reuse + fill the row) rather than spawning a dup.
+            let same_url = incoming_url.is_empty()
+                || existing_url.is_empty()
+                || same_base_url(&existing_url, &incoming_url);
+            // Guard against the degenerate case of two custom providers with
+            // the exact same name AND Base URL but distinct credentials — that
+            // is handled downstream via credential fingerprinting, not here.
+            let _ = id;
+            name.trim().eq_ignore_ascii_case(account.provider_name.trim()) && same_url
+        });
     drop(stmt);
     if let Some((id, _name, existing_protocols, existing_base_urls, existing_models)) = existing {
         let mut protocols = crate::proxy::router::parse_protocols(existing_protocols.as_deref());
@@ -1790,7 +1827,8 @@ fn resolve_provider_in_transaction(
             .and_then(|raw| serde_json::from_str::<HashMap<String, String>>(raw).ok())
             .and_then(|urls| urls.values().next().cloned())
             .unwrap_or_default();
-        let new_base_url = if !account.base_url.is_empty() && account.base_url != existing_base_url {
+        let new_base_url = if !account.base_url.is_empty() && account.base_url != existing_base_url
+        {
             account.base_url.clone()
         } else {
             existing_base_url
@@ -2262,6 +2300,27 @@ fn provider_identity_key(provider_name: &str) -> String {
         "xai" | "grok" | "xaigrok" => "xai".into(),
         _ => normalized,
     }
+}
+
+/// Whether `provider_identity_key` resolved to a *known official* upstream
+/// (openai/anthropic/google/antigravity/xai). Anything else is treated as a
+/// user-defined custom/relay provider and must NOT be collapsed across rows —
+/// otherwise several custom providers sharing a generic name (e.g. "custom",
+/// "自定义", or an empty default) get merged into one row whose Base URL/API
+/// key is then rewritten for every attached account.
+fn is_official_identity_key(key: &str) -> bool {
+    matches!(
+        key,
+        "openai" | "anthropic" | "google" | "antigravity" | "xai"
+    )
+}
+
+/// Compare two Base URLs ignoring trailing slashes and trivial whitespace, so
+/// `https://x/v1` and `https://x/v1/` are treated as the same upstream.
+fn same_base_url(a: &str, b: &str) -> bool {
+    let na = a.trim().trim_end_matches('/');
+    let nb = b.trim().trim_end_matches('/');
+    na.eq_ignore_ascii_case(nb)
 }
 
 fn model_resource_key(provider_name: &str, model: &str) -> String {
@@ -3052,10 +3111,11 @@ mod tests {
         let relay = &batch.accounts[1];
         assert_eq!(relay.credential_type, "upstream_key");
         assert_eq!(relay.credential.api_key.as_deref(), Some("tp-fake"));
-        // Base URL is normalised to the protocol mount point (origin only):
-        // the gateway composes `/v1/chat/completions` at request time, so the
-        // raw `/v1` suffix is intentionally stripped.
-        assert_eq!(relay.base_url, "https://token-plan-cn.xiaomimimo.com");
+        // Base URL is stored as imported (a trailing `/v1` is fine): the
+        // shared URL builder composes `/v1/chat/completions` at request time
+        // and de-duplicates the version segment, so both the raw versioned
+        // form and the bare origin resolve to the same upstream.
+        assert_eq!(relay.base_url, "https://token-plan-cn.xiaomimimo.com/v1");
         assert_eq!(relay.provider_name, "XiaoMi MiMo");
     }
 }

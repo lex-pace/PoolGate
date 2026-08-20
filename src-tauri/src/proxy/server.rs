@@ -32,6 +32,39 @@ use uuid::Uuid;
 
 const MAX_POOL_ATTEMPTS: usize = 3;
 
+/// Where the gateway accepts connections. `Localhost` binds 127.0.0.1 (the
+/// default, personal use); `Lan` binds 0.0.0.0 so teammates on the same
+/// network can reach it — always behind the gateway access key.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ListenMode {
+    Localhost,
+    Lan,
+}
+
+impl ListenMode {
+    pub fn from_setting(value: &str) -> Self {
+        match value {
+            "lan" => ListenMode::Lan,
+            _ => ListenMode::Localhost,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ListenMode::Localhost => "localhost",
+            ListenMode::Lan => "lan",
+        }
+    }
+
+    /// The host address this mode binds to.
+    pub fn bind_host(self) -> &'static str {
+        match self {
+            ListenMode::Localhost => "127.0.0.1",
+            ListenMode::Lan => "0.0.0.0",
+        }
+    }
+}
+
 fn should_failover(status: StatusCode) -> bool {
     matches!(
         status,
@@ -40,6 +73,137 @@ fn should_failover(status: StatusCode) -> bool {
             | StatusCode::REQUEST_TIMEOUT
             | StatusCode::TOO_MANY_REQUESTS
     ) || status.is_server_error()
+}
+
+/// Detect provider risk-control / ban signals in an upstream failure.
+/// Anti-abuse systems answer with characteristic phrasing rather than a plain
+/// auth error; recognizing them lets the gateway pull the account out of
+/// rotation immediately instead of failing over onto a dead credential.
+fn detect_ban_signal(status: StatusCode, message: Option<&str>) -> Option<String> {
+    if status != StatusCode::FORBIDDEN && status != StatusCode::UNAUTHORIZED {
+        return None;
+    }
+    let message = message?;
+    let lowered = message.to_lowercase();
+    const PATTERNS: [&str; 8] = [
+        "unusual activity",
+        "flagged",
+        "suspended",
+        "banned",
+        "deactivated",
+        "misuse",
+        "suspicious",
+        "violat",
+    ];
+    PATTERNS
+        .iter()
+        .any(|pattern| lowered.contains(pattern))
+        .then(|| message.to_string())
+}
+
+/// Suspend an account after a detected ban signal. Health status `suspended`
+/// keeps it out of the routing pool AND out of auto-recovery (which only
+/// re-checks failed/timeout/error), so a flagged credential is not hammered
+/// again every cooldown window. A critical alert row surfaces it in the UI.
+async fn mark_account_suspended(
+    state: &ProxyState,
+    account: &crate::db::accounts::Account,
+    status_code: u16,
+    signal: String,
+) {
+    tracing::warn!(
+        "Risk-control signal on account '{}' (HTTP {}): suspending from routing",
+        account.id,
+        status_code
+    );
+    let redacted = crate::services::redaction::redact_sensitive(&signal);
+    let display_name = account
+        .name
+        .clone()
+        .unwrap_or_else(|| account.id.clone());
+    let _ = state.app_state.db.accounts.update_health(
+        &state.app_state.db.conn,
+        &account.id,
+        "suspended",
+        status_code,
+        &format!("上游风控信号：{}", redacted),
+        0,
+    );
+    if let Ok(conn) = state.app_state.db.conn.lock() {
+        let _ = conn.execute(
+            "INSERT INTO alerts (level, category, title, message) VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![
+                "critical",
+                "health",
+                "账号疑似被上游风控",
+                format!(
+                    "账号 {} 收到 {} 风控信号，已自动停用路由。请到服务商侧确认账号状态后重新启用。",
+                    display_name, status_code
+                )
+            ],
+        );
+    }
+}
+
+/// Derive a conversation-affinity key for sticky routing. Explicit client
+/// hints win (`x-poolgate-session` plus the Codex-style `session_id` /
+/// `conversation_id` headers); otherwise a hash of the conversation's first
+/// user message acts as a stable per-conversation fingerprint.
+fn session_affinity_key(headers: &HeaderMap, body: &[u8]) -> Option<String> {
+    for header in [
+        "x-poolgate-session",
+        "session-id",
+        "session_id",
+        "conversation-id",
+        "conversation_id",
+    ] {
+        if let Some(value) = headers.get(header).and_then(|value| value.to_str().ok()) {
+            let value = value.trim();
+            if !value.is_empty() && value.len() <= 256 {
+                return Some(format!("h:{}", value));
+            }
+        }
+    }
+    first_user_message_fingerprint(body).map(|hash| format!("f:{}", hash))
+}
+
+fn first_user_message_fingerprint(body: &[u8]) -> Option<String> {
+    let value = serde_json::from_slice::<serde_json::Value>(body).ok()?;
+    // Chat / Responses / Anthropic bodies carry messages[] or input[];
+    // Gemini carries contents[].
+    let messages = value
+        .get("messages")
+        .and_then(|node| node.as_array())
+        .or_else(|| value.get("input").and_then(|node| node.as_array()))
+        .or_else(|| value.get("contents").and_then(|node| node.as_array()))?;
+    let first_user = messages
+        .iter()
+        .find(|message| message.get("role").and_then(|role| role.as_str()) == Some("user"))?;
+    let content = first_user
+        .get("content")
+        .or_else(|| first_user.get("parts"))?;
+    let text = match content {
+        serde_json::Value::String(text) => text.clone(),
+        serde_json::Value::Array(blocks) => blocks
+            .iter()
+            .filter_map(|block| block.get("text").and_then(|text| text.as_str()))
+            .collect::<Vec<_>>()
+            .join(" "),
+        _ => return None,
+    };
+    // The first user message is stable across a conversation's turns while
+    // the full body keeps growing; 256 chars are plenty for uniqueness.
+    let trimmed: String = text.chars().take(256).collect();
+    if trimmed.trim().is_empty() {
+        return None;
+    }
+    let digest = sha2::Sha256::digest(trimmed.as_bytes());
+    Some(
+        digest[..8]
+            .iter()
+            .map(|byte| format!("{:02x}", byte))
+            .collect(),
+    )
 }
 
 fn attach_route_headers(
@@ -179,6 +343,16 @@ fn defer_stream_route_log(
     });
 }
 
+/// Route-log error detail: prefer the downstream-provided error message
+/// attached by the protocol handler, falling back to the bare HTTP status.
+fn route_error_message(response: &Response, status: StatusCode) -> Option<String> {
+    response
+        .extensions()
+        .get::<crate::proxy::UpstreamErrorDetail>()
+        .map(|detail| detail.0.clone())
+        .or_else(|| (!status.is_success()).then(|| status.to_string()))
+}
+
 async fn write_route_log(
     state: &ProxyState,
     group_id: &str,
@@ -213,7 +387,9 @@ async fn write_route_log(
         status_code: status_code.map(|status| status.as_u16() as i64),
         input_tokens: usage.available.then_some(usage.input_tokens),
         output_tokens: usage.available.then_some(usage.output_tokens),
-        cache_tokens: usage.available.then_some(usage.cache_tokens),
+        cache_tokens: usage.available.then_some(usage.cache_tokens()),
+        cache_read_tokens: usage.available.then_some(usage.cache_read_tokens),
+        cache_write_tokens: usage.available.then_some(usage.cache_write_tokens),
         cost: None,
         latency_ms: Some(latency_ms),
         ttft_ms: None,
@@ -231,6 +407,9 @@ pub struct ProxyState {
     pub account_concurrency: AccountConcurrency,
     pub log_writer: LogWriter,
     pub startup_time: std::time::Instant,
+    /// Listen mode this server instance was bound with. Fixed at startup; the
+    /// settings command restarts the server when it changes.
+    pub listen_mode: ListenMode,
 }
 
 /// Start the proxy server.
@@ -238,10 +417,12 @@ pub struct ProxyState {
 /// # Arguments
 /// * `app_state` - Shared application state (database etc.).
 /// * `port` - Port to bind to (default 9800).
+/// * `listen_mode` - Bind host: `Localhost` → 127.0.0.1, `Lan` → 0.0.0.0.
 /// * `shutdown_rx` - Receiver for graceful shutdown signal.
 pub async fn start_proxy_server(
     app_state: Arc<AppState>,
     port: u16,
+    listen_mode: ListenMode,
     shutdown_rx: tokio::sync::oneshot::Receiver<()>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let model_cache = ModelCache::default();
@@ -257,14 +438,20 @@ pub async fn start_proxy_server(
         account_concurrency: app_state.account_concurrency.clone(),
         log_writer,
         startup_time: std::time::Instant::now(),
+        listen_mode,
     });
 
     // Browser access is limited to local desktop/web development origins and
-    // the exact methods/headers used by supported Agent clients.
+    // the exact methods/headers used by supported Agent clients. On the LAN the
+    // gateway is always behind the access key, so cross-origin browser clients
+    // (any origin) are safe to allow — auth is enforced per request.
     let cors = CorsLayer::new()
-        .allow_origin(AllowOrigin::predicate(|origin, _parts| {
-            is_allowed_local_origin(origin)
-        }))
+        .allow_origin(match listen_mode {
+            ListenMode::Localhost => AllowOrigin::predicate(|origin, _parts| {
+                is_allowed_local_origin(origin)
+            }),
+            ListenMode::Lan => AllowOrigin::any(),
+        })
         .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
         .allow_headers([
             header::AUTHORIZATION,
@@ -315,7 +502,7 @@ pub async fn start_proxy_server(
         ))
         .with_state(proxy_state.clone());
 
-    let addr = format!("127.0.0.1:{}", port);
+    let addr = format!("{}:{}", listen_mode.bind_host(), port);
     tracing::info!("PoolGate proxy server starting on {}", addr);
 
     let listener = tokio::net::TcpListener::bind(&addr).await?;
@@ -355,6 +542,7 @@ async fn openai_handler(
         return response;
     }
     let is_streaming = is_streaming_request(&body);
+    let session_key = session_affinity_key(&headers, &body);
     let mut excluded = HashSet::new();
     let mut last_response = None;
 
@@ -364,6 +552,7 @@ async fn openai_handler(
             &strategy,
             model.as_deref(),
             Some("chat"),
+            session_key.as_deref(),
             &excluded,
             &state.app_state,
         )
@@ -395,6 +584,18 @@ async fn openai_handler(
                 continue;
             }
         };
+        // Pace subscription (OAuth) accounts: minimum spacing + jitter keeps
+        // the cadence human-plausible for provider risk models.
+        state
+            .app_state
+            .account_throttle
+            .wait_turn(
+                &account.id,
+                crate::proxy::concurrency::is_subscription_credential(
+                    account.credential_type.as_deref(),
+                ),
+            )
+            .await;
 
         let result =
             openai::handle_openai_request(body.clone(), &account, &provider, Some(permit)).await;
@@ -402,6 +603,11 @@ async fn openai_handler(
         match result {
             Ok((mut response, usage)) => {
                 let status = response.status();
+                if let Some(signal) =
+                    detect_ban_signal(status, route_error_message(&response, status).as_deref())
+                {
+                    mark_account_suspended(&state, &account, status.as_u16(), signal).await;
+                }
                 let retry = should_failover(status) && attempt < MAX_POOL_ATTEMPTS;
                 if status.is_success() {
                     state.circuit_breaker.record_success(&account.id).await;
@@ -440,7 +646,7 @@ async fn openai_handler(
                         Some(status),
                         latency_ms,
                         is_streaming,
-                        (!status.is_success()).then(|| status.to_string()),
+                        route_error_message(&response, status),
                         usage,
                     )
                     .await;
@@ -519,6 +725,7 @@ async fn responses_handler(
         return response;
     }
     let is_streaming = is_streaming_request(&body);
+    let session_key = session_affinity_key(&headers, &body);
     let mut parsed: serde_json::Value = match serde_json::from_slice(&body) {
         Ok(value) => value,
         Err(_) => return error_response(StatusCode::BAD_REQUEST, "invalid JSON body"),
@@ -544,6 +751,7 @@ async fn responses_handler(
             &strategy,
             model.as_deref(),
             Some("responses"),
+            session_key.as_deref(),
             &excluded,
             &state.app_state,
         )
@@ -574,6 +782,16 @@ async fn responses_handler(
                 continue;
             }
         };
+        state
+            .app_state
+            .account_throttle
+            .wait_turn(
+                &account.id,
+                crate::proxy::concurrency::is_subscription_credential(
+                    account.credential_type.as_deref(),
+                ),
+            )
+            .await;
 
         let acct_protocols = router::parse_protocols(account.protocols.as_deref());
         let protocols = if acct_protocols.is_empty() {
@@ -583,6 +801,17 @@ async fn responses_handler(
         };
         let mut upstream_body = responses::convert_request(&protocols, &parsed);
         let upstream_kind = responses::upstream_kind(&protocols);
+        // Claude Code subscription accounts on the Anthropic upstream need the
+        // mandatory Claude Code system prefix injected into the converted body;
+        // the official CLI fingerprint headers are applied in the auth arm below.
+        let anthropic_claude_oauth = upstream_kind == responses::UpstreamKind::Anthropic
+            && crate::services::claude_adapter::is_claude_oauth(&account, &provider);
+        if anthropic_claude_oauth {
+            upstream_body = crate::services::claude_adapter::prepare_messages_body(
+                &upstream_body,
+                is_streaming,
+            );
+        }
         let upstream_protocol = match upstream_kind {
             responses::UpstreamKind::Responses => "responses",
             responses::UpstreamKind::Chat => "chat",
@@ -645,7 +874,8 @@ async fn responses_handler(
                         if attempt < MAX_POOL_ATTEMPTS {
                             tracing::debug!(
                                 "Codex OAuth incompatible ({}), trying next account: {}",
-                                error, account.id
+                                error,
+                                account.id
                             );
                             continue;
                         }
@@ -743,9 +973,16 @@ async fn responses_handler(
                 (
                     responses::UpstreamKind::Anthropic,
                     crate::services::credentials::AuthCredential::Bearer(secret),
-                ) => req
-                    .header("Authorization", format!("Bearer {}", secret))
-                    .header("anthropic-version", "2023-06-01"),
+                ) => {
+                    let request = req
+                        .header("Authorization", format!("Bearer {}", secret))
+                        .header("anthropic-version", "2023-06-01");
+                    if anthropic_claude_oauth {
+                        crate::services::client_profiles::apply_claude_code_profile(request)
+                    } else {
+                        request
+                    }
+                }
                 (
                     responses::UpstreamKind::Gemini,
                     crate::services::credentials::AuthCredential::ApiKey(secret),
@@ -965,6 +1202,16 @@ async fn responses_handler(
                 } else if should_failover(status) {
                     state.circuit_breaker.record_failure(&account.id).await;
                 }
+                // Keep the downstream-provided error detail for the request log.
+                let error_message = if status.is_success() {
+                    None
+                } else {
+                    crate::proxy::protocol::upstream_error_message(raw_text.as_bytes())
+                        .or_else(|| Some(status.to_string()))
+                };
+                if let Some(signal) = detect_ban_signal(status, error_message.as_deref()) {
+                    mark_account_suspended(&state, &account, status.as_u16(), signal).await;
+                }
                 write_route_log(
                     &state,
                     &group_id,
@@ -978,7 +1225,7 @@ async fn responses_handler(
                     Some(status),
                     latency_ms,
                     is_streaming,
-                    (!status.is_success()).then(|| status.to_string()),
+                    error_message,
                     usage_from_response_text(upstream_kind, &raw_text),
                 )
                 .await;
@@ -1050,6 +1297,7 @@ async fn anthropic_handler(
         return response;
     }
     let is_streaming = is_streaming_request(&body);
+    let session_key = session_affinity_key(&headers, &body);
     let mut excluded = HashSet::new();
     let mut last_response = None;
 
@@ -1059,6 +1307,7 @@ async fn anthropic_handler(
             &strategy,
             model.as_deref(),
             Some("anthropic"),
+            session_key.as_deref(),
             &excluded,
             &state.app_state,
         )
@@ -1089,14 +1338,80 @@ async fn anthropic_handler(
                 continue;
             }
         };
+        state
+            .app_state
+            .account_throttle
+            .wait_turn(
+                &account.id,
+                crate::proxy::concurrency::is_subscription_credential(
+                    account.credential_type.as_deref(),
+                ),
+            )
+            .await;
 
+        let is_claude_oauth =
+            crate::services::claude_adapter::is_claude_oauth(&account, &provider);
         let result =
             anthropic::handle_anthropic_request(body.clone(), &account, &provider, Some(permit))
                 .await;
+        // Claude OAuth tokens expire mid-session: refresh once on 401 and
+        // retry with the same account before failing over, mirroring the
+        // Codex 401 handling in the Responses entry.
+        let result = if is_claude_oauth
+            && matches!(&result, Ok((response, _)) if response.status() == StatusCode::UNAUTHORIZED)
+        {
+            match crate::services::claude_adapter::refresh_after_unauthorized(
+                &state.app_state,
+                &account.id,
+            )
+            .await
+            {
+                Ok(refreshed) => {
+                    match state.account_concurrency.acquire(&refreshed.id).await {
+                        Ok(refreshed_permit) => {
+                            tracing::info!(
+                                "Claude OAuth token refreshed for '{}'; retrying request",
+                                account.id
+                            );
+                            anthropic::handle_anthropic_request(
+                                body.clone(),
+                                &refreshed,
+                                &provider,
+                                Some(refreshed_permit),
+                            )
+                            .await
+                        }
+                        Err(error) => {
+                            tracing::warn!(
+                                "Account '{}' is at capacity after refresh: {}",
+                                refreshed.id,
+                                error
+                            );
+                            result
+                        }
+                    }
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        "Claude OAuth 401 token refresh failed for '{}': {}",
+                        account.id,
+                        crate::services::redaction::redact_sensitive(&error)
+                    );
+                    result
+                }
+            }
+        } else {
+            result
+        };
         let latency_ms = start.elapsed().as_millis() as i64;
         match result {
             Ok((mut response, usage)) => {
                 let status = response.status();
+                if let Some(signal) =
+                    detect_ban_signal(status, route_error_message(&response, status).as_deref())
+                {
+                    mark_account_suspended(&state, &account, status.as_u16(), signal).await;
+                }
                 let retry = should_failover(status) && attempt < MAX_POOL_ATTEMPTS;
                 if status.is_success() {
                     state.circuit_breaker.record_success(&account.id).await;
@@ -1135,7 +1450,7 @@ async fn anthropic_handler(
                         Some(status),
                         latency_ms,
                         is_streaming,
-                        (!status.is_success()).then(|| status.to_string()),
+                        route_error_message(&response, status),
                         usage,
                     )
                     .await;
@@ -1254,6 +1569,7 @@ async fn gemini_handler(
     }
     let is_streaming =
         model_action.contains("streamGenerateContent") || is_streaming_request(&body);
+    let session_key = session_affinity_key(&headers, &body);
     let mut excluded = HashSet::new();
     let mut last_response = None;
 
@@ -1263,6 +1579,7 @@ async fn gemini_handler(
             &strategy,
             model.as_deref(),
             Some("gemini"),
+            session_key.as_deref(),
             &excluded,
             &state.app_state,
         )
@@ -1293,6 +1610,16 @@ async fn gemini_handler(
                 continue;
             }
         };
+        state
+            .app_state
+            .account_throttle
+            .wait_turn(
+                &account.id,
+                crate::proxy::concurrency::is_subscription_credential(
+                    account.credential_type.as_deref(),
+                ),
+            )
+            .await;
 
         let result = gemini::handle_gemini_request(
             body.clone(),
@@ -1306,6 +1633,11 @@ async fn gemini_handler(
         match result {
             Ok((mut response, usage)) => {
                 let status = response.status();
+                if let Some(signal) =
+                    detect_ban_signal(status, route_error_message(&response, status).as_deref())
+                {
+                    mark_account_suspended(&state, &account, status.as_u16(), signal).await;
+                }
                 let retry = should_failover(status) && attempt < MAX_POOL_ATTEMPTS;
                 if status.is_success() {
                     state.circuit_breaker.record_success(&account.id).await;
@@ -1344,7 +1676,7 @@ async fn gemini_handler(
                         Some(status),
                         latency_ms,
                         is_streaming,
-                        (!status.is_success()).then(|| status.to_string()),
+                        route_error_message(&response, status),
                         usage,
                     )
                     .await;
@@ -1540,6 +1872,8 @@ fn gateway_log_event(
         input_tokens: None,
         output_tokens: None,
         cache_tokens: None,
+        cache_read_tokens: None,
+        cache_write_tokens: None,
         cost: None,
         latency_ms: Some(latency_ms),
         ttft_ms: None,
@@ -1596,18 +1930,26 @@ async fn auth_middleware(
             )
         }
     };
-    let Some(expected) = expected else {
-        // Open mode: attach virtual-key context if a valid client key was
-        // presented, then pass through (no auth required, localhost-only).
-        attach_client_key_if_present(&state, &mut request);
-        return run_with_gateway_audit(request, next).await;
-    };
-
     // Always allow the health probe unauthenticated so monitoring/UI can check
     // liveness without a key.
     if request.uri().path() == "/health" {
         return run_with_gateway_audit(request, next).await;
     }
+
+    let Some(expected) = expected else {
+        // Open mode is a localhost convenience. On the LAN it would expose the
+        // whole account pool unauthenticated, so LAN mode never opens it.
+        if state.listen_mode == ListenMode::Lan {
+            return error_response(
+                StatusCode::UNAUTHORIZED,
+                "LAN 监听模式必须配置网关访问密钥。请在 PoolGate 设置中保存访问密钥后重试。",
+            );
+        }
+        // Open mode: attach virtual-key context if a valid client key was
+        // presented, then pass through (no auth required, localhost-only).
+        attach_client_key_if_present(&state, &mut request);
+        return run_with_gateway_audit(request, next).await;
+    };
 
     let headers = request.headers().clone();
     let presented = extract_access_key(&headers);
@@ -1812,57 +2154,11 @@ fn usage_from_response_text(
     kind: responses::UpstreamKind,
     body: &str,
 ) -> crate::proxy::protocol::Usage {
-    let bytes = body.as_bytes();
     match kind {
-        responses::UpstreamKind::Anthropic => {
-            let (input_tokens, output_tokens) = anthropic::extract_usage(bytes);
-            crate::proxy::protocol::Usage {
-                input_tokens,
-                output_tokens,
-                cache_tokens: 0,
-                available: serde_json::from_str::<serde_json::Value>(body)
-                    .ok()
-                    .and_then(|value| value.get("usage").cloned())
-                    .is_some(),
-            }
-        }
-        responses::UpstreamKind::Gemini => {
-            let (input_tokens, output_tokens) = gemini::extract_usage(bytes);
-            crate::proxy::protocol::Usage {
-                input_tokens,
-                output_tokens,
-                cache_tokens: 0,
-                available: serde_json::from_str::<serde_json::Value>(body)
-                    .ok()
-                    .and_then(|value| value.get("usageMetadata").cloned())
-                    .is_some(),
-            }
-        }
-        responses::UpstreamKind::Responses | responses::UpstreamKind::Chat => {
-            let value = serde_json::from_str::<serde_json::Value>(body).ok();
-            let usage = value.as_ref().and_then(|value| value.get("usage"));
-            crate::proxy::protocol::Usage {
-                input_tokens: usage
-                    .and_then(|value| {
-                        value
-                            .get("input_tokens")
-                            .or_else(|| value.get("prompt_tokens"))
-                    })
-                    .and_then(|value| value.as_i64())
-                    .unwrap_or_default(),
-                output_tokens: usage
-                    .and_then(|value| {
-                        value
-                            .get("output_tokens")
-                            .or_else(|| value.get("completion_tokens"))
-                    })
-                    .and_then(|value| value.as_i64())
-                    .unwrap_or_default(),
-                cache_tokens: 0,
-                available: usage.is_some(),
-            }
-        }
+        // The generic decoder recognizes every protocol's usage vocabulary and
+        // normalizes cache tokens to the canonical fresh-input caliber.
         responses::UpstreamKind::Unsupported => crate::proxy::protocol::Usage::default(),
+        _ => crate::proxy::protocol::usage_from_response_body(body.as_bytes()),
     }
 }
 
@@ -1918,7 +2214,7 @@ mod tests {
         auth_middleware, constant_time_eq, error_response, gateway_log_event, gateway_log_status,
         is_allowed_local_origin, logging_middleware, model_from_gateway_path,
         request_id_from_headers, short_fingerprint, should_failover, should_write_gateway_log,
-        GatewayAuditContext, ProxyState,
+        GatewayAuditContext, ListenMode, ProxyState,
     };
     use axum::{
         body::Body,
@@ -1934,7 +2230,10 @@ mod tests {
     };
     use tower::ServiceExt;
 
-    fn audit_test_state(gateway_key: Option<&str>) -> (Arc<ProxyState>, std::path::PathBuf) {
+    fn audit_test_state(
+        gateway_key: Option<&str>,
+        listen_mode: ListenMode,
+    ) -> (Arc<ProxyState>, std::path::PathBuf) {
         let db_path = std::env::temp_dir().join(format!(
             "poolgate-audit-{}.db",
             uuid::Uuid::new_v4().simple()
@@ -1948,8 +2247,10 @@ mod tests {
             proxy: Mutex::new(None),
             gateway_runtime: Default::default(),
             account_concurrency: Default::default(),
+            account_throttle: Default::default(),
             agent_app_operations: Mutex::new(HashSet::new()),
             app_data_dir: Some(std::env::temp_dir()),
+            token_monitor: Default::default(),
         });
         let state = Arc::new(ProxyState {
             app_state: app_state.clone(),
@@ -1958,6 +2259,7 @@ mod tests {
             account_concurrency: app_state.account_concurrency.clone(),
             log_writer: crate::proxy::logger::LogWriter::new_with_app_state(&app_state),
             startup_time: std::time::Instant::now(),
+            listen_mode,
         });
         (state, db_path)
     }
@@ -1972,6 +2274,7 @@ mod tests {
 
         Router::new()
             .route("/ok", get(ok_handler))
+            .route("/health", get(ok_handler))
             .route("/invalid", post(invalid_handler))
             .layer(axum::middleware::from_fn_with_state(
                 state.clone(),
@@ -2002,9 +2305,50 @@ mod tests {
         panic!("audit rows were not flushed in time");
     }
 
+    #[test]
+    fn listen_mode_setting_maps_to_bind_host() {
+        assert_eq!(ListenMode::from_setting("lan"), ListenMode::Lan);
+        assert_eq!(ListenMode::from_setting("localhost"), ListenMode::Localhost);
+        assert_eq!(ListenMode::from_setting("anything-else"), ListenMode::Localhost);
+        assert_eq!(ListenMode::from_setting(""), ListenMode::Localhost);
+        assert_eq!(ListenMode::Localhost.bind_host(), "127.0.0.1");
+        assert_eq!(ListenMode::Lan.bind_host(), "0.0.0.0");
+        assert_eq!(ListenMode::Lan.as_str(), "lan");
+        assert_eq!(ListenMode::Localhost.as_str(), "localhost");
+    }
+
+    #[tokio::test]
+    async fn lan_mode_without_key_rejects_everything_except_health() {
+        let (state, db_path) = audit_test_state(None, ListenMode::Lan);
+        let app = audit_test_router(state.clone());
+
+        // LAN + no access key: every request (except /health) must be rejected,
+        // because the open-gateway convenience is localhost-only.
+        let response = app
+            .clone()
+            .oneshot(Request::builder().uri("/ok").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let _ = std::fs::remove_file(&db_path);
+    }
+
     #[tokio::test]
     async fn gateway_middleware_persists_success_and_failure_responses() {
-        let (state, db_path) = audit_test_state(Some("admin-secret"));
+        let (state, db_path) = audit_test_state(Some("admin-secret"), ListenMode::Localhost);
         let app = audit_test_router(state.clone());
         let cases = [
             ("GET", "/ok", Some("Bearer admin-secret"), 200),
@@ -2181,5 +2525,78 @@ mod tests {
         ] {
             assert!(!should_failover(status), "{} should not fail over", status);
         }
+    }
+
+    #[test]
+    fn ban_signals_are_recognized_but_plain_errors_are_not() {
+        for (status, message) in [
+            (
+                StatusCode::FORBIDDEN,
+                "Your account has been flagged for potential misuse",
+            ),
+            (
+                StatusCode::FORBIDDEN,
+                "We've detected unusual activity associated with this account",
+            ),
+            (StatusCode::UNAUTHORIZED, "Account suspended for violations"),
+            (StatusCode::FORBIDDEN, "This token has been deactivated"),
+        ] {
+            assert!(
+                super::detect_ban_signal(status, Some(message)).is_some(),
+                "should recognize: {}",
+                message
+            );
+        }
+        // Plain auth/quota failures must NOT suspend the account.
+        for (status, message) in [
+            (StatusCode::UNAUTHORIZED, Some("invalid x-api-key")),
+            (StatusCode::TOO_MANY_REQUESTS, Some("rate limit exceeded")),
+            (StatusCode::FORBIDDEN, None),
+            (StatusCode::BAD_REQUEST, Some("Your account has been suspended")),
+        ] {
+            assert!(
+                super::detect_ban_signal(status, message).is_none(),
+                "should not flag: {:?}",
+                message
+            );
+        }
+    }
+
+    #[test]
+    fn session_affinity_key_prefers_headers_then_body_fingerprint() {
+        let mut headers = axum::http::HeaderMap::new();
+        // Body fingerprint: same first user message → same key across turns.
+        let turn_one = super::session_affinity_key(
+            &headers,
+            br#"{"model":"claude-sonnet-4","messages":[{"role":"user","content":"fix the login bug"},{"role":"assistant","content":"ok"}]}"#,
+        );
+        let turn_two = super::session_affinity_key(
+            &headers,
+            br#"{"model":"claude-sonnet-4","messages":[{"role":"user","content":"fix the login bug"},{"role":"assistant","content":"done"},{"role":"user","content":"now add tests"}]}"#,
+        );
+        assert!(turn_one.is_some());
+        assert_eq!(turn_one, turn_two, "first user message is conversation-stable");
+
+        // A different conversation gets a different key.
+        let other = super::session_affinity_key(
+            &headers,
+            br#"{"model":"claude-sonnet-4","messages":[{"role":"user","content":"write a poem"}]}"#,
+        );
+        assert_ne!(turn_one, other);
+
+        // Explicit session header wins and is stable regardless of body.
+        headers.insert("session_id", "sess-123".parse().unwrap());
+        let from_header = super::session_affinity_key(
+            &headers,
+            br#"{"messages":[{"role":"user","content":"anything"}]}"#,
+        );
+        assert_eq!(from_header.as_deref(), Some("h:sess-123"));
+
+        // Anthropic block-style content arrays also fingerprint.
+        let blocks = super::session_affinity_key(
+            &axum::http::HeaderMap::new(),
+            br#"{"messages":[{"role":"user","content":[{"type":"text","text":"analyze this repo"}]}]}"#,
+        );
+        assert!(blocks.is_some());
     }
 }

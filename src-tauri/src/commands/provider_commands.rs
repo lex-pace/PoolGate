@@ -135,7 +135,8 @@ async fn test_openai_chat(
     }
 
     // Try to extract the reply text from the response
-    let reply = extract_chat_reply(&text).unwrap_or_else(|| "(响应解析成功，但未提取到文本)".to_string());
+    let reply =
+        extract_chat_reply(&text).unwrap_or_else(|| "(响应解析成功，但未提取到文本)".to_string());
     Ok((reply, latency_ms))
 }
 
@@ -181,7 +182,8 @@ async fn test_anthropic_chat(
         return Err(format!("HTTP {}: {}", status, truncate(&text, 200)));
     }
 
-    let reply = extract_anthropic_reply(&text).unwrap_or_else(|| "(响应解析成功，但未提取到文本)".to_string());
+    let reply = extract_anthropic_reply(&text)
+        .unwrap_or_else(|| "(响应解析成功，但未提取到文本)".to_string());
     Ok((reply, latency_ms))
 }
 
@@ -227,7 +229,8 @@ async fn test_gemini_chat(
         return Err(format!("HTTP {}: {}", status, truncate(&text, 200)));
     }
 
-    let reply = extract_gemini_reply(&text).unwrap_or_else(|| "(响应解析成功，但未提取到文本)".to_string());
+    let reply =
+        extract_gemini_reply(&text).unwrap_or_else(|| "(响应解析成功，但未提取到文本)".to_string());
     Ok((reply, latency_ms))
 }
 
@@ -280,14 +283,11 @@ pub async fn test_provider_connection(
         .ok_or_else(|| "Provider not found".to_string())?;
 
     // Get the first API key
-    let api_key = provider
-        .api_keys
-        .as_ref()
-        .and_then(|keys| {
-            serde_json::from_str::<Vec<String>>(keys)
-                .ok()
-                .and_then(|k| k.into_iter().find(|k| !k.trim().is_empty()))
-        });
+    let api_key = provider.api_keys.as_ref().and_then(|keys| {
+        serde_json::from_str::<Vec<String>>(keys)
+            .ok()
+            .and_then(|k| k.into_iter().find(|k| !k.trim().is_empty()))
+    });
 
     let api_key = match api_key {
         Some(k) => k,
@@ -316,7 +316,9 @@ pub async fn test_provider_connection(
             }
         }
     }
-    let client = builder.build().map_err(|e| format!("创建 HTTP 客户端失败: {}", e))?;
+    let client = builder
+        .build()
+        .map_err(|e| format!("创建 HTTP 客户端失败: {}", e))?;
 
     let model = pick_test_model(&provider);
     let protocol = canonical_protocol(&provider.protocol);

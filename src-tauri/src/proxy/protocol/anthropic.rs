@@ -32,6 +32,11 @@ fn build_client(provider: &Provider) -> Client {
 
 /// Handle an Anthropic-compatible /v1/messages request.
 ///
+/// Claude Code subscription (OAuth) accounts get the full official-client
+/// treatment: the mandatory Claude Code system prefix and the CLI fingerprint
+/// headers (see `claude_adapter`). Without them Anthropic's backend rejects or
+/// risk-flags the request.
+///
 /// # Arguments
 /// * `body` - Raw request bytes.
 /// * `account` - The selected account (API key source).
@@ -47,6 +52,23 @@ pub async fn handle_anthropic_request(
 
     // 2. Build upstream URL
     let upstream_url = build_upstream_url(provider, "/v1/messages");
+
+    // Claude OAuth: inject the required Claude Code system prefix so the
+    // Anthropic backend accepts subscription traffic from any client.
+    let claude_oauth = crate::services::claude_adapter::is_claude_oauth(account, provider);
+    let request_body: Vec<u8> = if claude_oauth {
+        match serde_json::from_slice::<serde_json::Value>(&body) {
+            Ok(value) => serde_json::to_vec(&crate::services::claude_adapter::prepare_messages_body(
+                &value, is_streaming,
+            ))
+            .map_err(|_| StatusCode::BAD_REQUEST)?,
+            // Non-JSON bodies cannot receive the prefix; forward as-is and let
+            // the upstream reject it.
+            Err(_) => body.to_vec(),
+        }
+    } else {
+        body.to_vec()
+    };
 
     // 3. Build headers
     let mut headers = HeaderMap::new();
@@ -75,6 +97,26 @@ pub async fn handle_anthropic_request(
         }
     }
     headers.insert("anthropic-version", HeaderValue::from_static("2023-06-01"));
+    if claude_oauth {
+        // Present the official Claude Code fingerprint (UA + beta flags + app
+        // id); see services/client_profiles.rs for why this must be consistent.
+        for (name, value) in [
+            (
+                "User-Agent",
+                crate::services::client_profiles::CLAUDE_CODE_USER_AGENT,
+            ),
+            (
+                "anthropic-beta",
+                crate::services::client_profiles::CLAUDE_CODE_BETA_FLAGS,
+            ),
+            ("x-app", "cli"),
+        ] {
+            let name = name
+                .parse::<axum::http::HeaderName>()
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            headers.insert(name, HeaderValue::from_static(value));
+        }
+    }
 
     // 4. Build client and forward
     let client = build_client(provider);
@@ -82,7 +124,7 @@ pub async fn handle_anthropic_request(
     let upstream_response = client
         .post(&upstream_url)
         .headers(headers)
-        .body(body.to_vec())
+        .body(request_body)
         .send()
         .await
         .map_err(|e| {
@@ -111,21 +153,23 @@ pub async fn handle_anthropic_request(
             StatusCode::BAD_GATEWAY
         })?;
 
-        let (input_tokens, output_tokens) = extract_usage(&response_body);
-        let usage = crate::proxy::protocol::Usage {
-            input_tokens,
-            output_tokens,
-            cache_tokens: 0,
-            available: serde_json::from_slice::<serde_json::Value>(&response_body)
-                .ok()
-                .and_then(|value| value.get("usage").cloned())
-                .is_some(),
+        let usage = crate::proxy::protocol::usage_from_response_body(&response_body);
+        // Keep the downstream-provided error detail for the request log.
+        let upstream_error = if status.is_success() {
+            None
+        } else {
+            crate::proxy::protocol::upstream_error_message(&response_body)
         };
         let mut response = Response::new(Body::from(response_body));
         *response.status_mut() = status;
         response
             .headers_mut()
             .insert("Content-Type", HeaderValue::from_static("application/json"));
+        if let Some(message) = upstream_error {
+            response
+                .extensions_mut()
+                .insert(crate::proxy::UpstreamErrorDetail(message));
+        }
         Ok((response, usage))
     }
 }
@@ -155,21 +199,9 @@ pub fn extract_model(body: &[u8]) -> Option<String> {
     None
 }
 
-/// Estimate token usage from an Anthropic response.
-/// Anthropic returns `usage.input_tokens` and `usage.output_tokens`.
-pub fn extract_usage(body: &[u8]) -> (i64, i64) {
-    if let Ok(val) = serde_json::from_slice::<serde_json::Value>(body) {
-        if let Some(usage) = val.get("usage") {
-            let input = usage
-                .get("input_tokens")
-                .and_then(|v| v.as_i64())
-                .unwrap_or(0);
-            let output = usage
-                .get("output_tokens")
-                .and_then(|v| v.as_i64())
-                .unwrap_or(0);
-            return (input, output);
-        }
-    }
-    (0, 0)
+/// Extract canonical token usage from an Anthropic response. Cache read and
+/// write tokens are kept separate (they bill at different rates); the input
+/// caliber matches Anthropic's native fresh-input reporting.
+pub fn extract_usage(body: &[u8]) -> crate::proxy::protocol::Usage {
+    crate::proxy::protocol::usage_from_response_body(body)
 }

@@ -1064,8 +1064,12 @@ export function getTraySnapshot(): Promise<TraySnapshot> {
   return invoke("get_tray_snapshot");
 }
 
-export function openPoolGateFromTray(page?: "dashboard" | "groups" | "settings", node?: string): Promise<void> {
-  return invoke("open_poolgate_from_tray", { page, node });
+export function openPoolGateFromTray(
+  page?: "dashboard" | "groups" | "settings" | "tokenmonitor",
+  node?: string,
+  tab?: string,
+): Promise<void> {
+  return invoke("open_poolgate_from_tray", { page, node, tab });
 }
 
 export function resizeTrayWindow(width: number, height: number): Promise<void> {
@@ -1111,8 +1115,23 @@ export function stopProxy(): Promise<void> {
   return invoke("stop_proxy");
 }
 
-export function getProxyStatus(): Promise<{ running: boolean; port: number; active_connections: number }> {
+export interface ProxyStatus {
+  running: boolean;
+  port: number;
+  active_connections: number;
+  /** Listen mode of the running server: "localhost" or "lan". */
+  listen_mode: string;
+  /** Host the server binds to (127.0.0.1 / 0.0.0.0). */
+  listen_host: string;
+}
+
+export function getProxyStatus(): Promise<ProxyStatus> {
   return invoke("get_proxy_status");
+}
+
+/** Enumerate this machine's non-loopback IPv4 LAN addresses. */
+export function getLanAddresses(): Promise<string[]> {
+  return invoke("get_lan_addresses");
 }
 
 // ============ Gateway Settings Commands ============
@@ -1122,6 +1141,8 @@ export interface GatewaySettings {
   access_key_set: boolean;
   /** Close button behavior: "hide" to minimize to tray, "quit" to exit application */
   close_button_behavior: string;
+  /** Listen address: "localhost" (127.0.0.1) or "lan" (0.0.0.0). */
+  listen_addr: string;
 }
 
 export function getGatewaySettings(): Promise<GatewaySettings> {
@@ -1133,6 +1154,46 @@ export function setGatewayAccessKey(accessKey: string): Promise<void> {
   return invoke("set_gateway_access_key", { accessKey });
 }
 
+/** Switch the gateway listen address: "localhost" or "lan". LAN requires a key. */
+export function setListenAddr(mode: "localhost" | "lan"): Promise<void> {
+  return invoke("set_listen_addr", { mode });
+}
+
+// ============ Product Mode ============
+
+export type AppMode = "gateway" | "monitor";
+
+export interface AppModeState {
+  selected: boolean;
+  mode: AppMode;
+}
+
+export function getAppMode(): Promise<AppModeState> {
+  return invoke("get_app_mode");
+}
+
+export function setAppMode(mode: AppMode): Promise<void> {
+  return invoke("set_app_mode", { mode });
+}
+
+// ============ First-run Onboarding ============
+
+export interface OnboardingState {
+  /** Whether the three-step wizard was completed or dismissed. */
+  completed: boolean;
+  account_count: number;
+  pool_count: number;
+}
+
+export function getOnboardingState(): Promise<OnboardingState> {
+  return invoke("get_onboarding_state");
+}
+
+/** Mark the onboarding wizard completed (or re-open it). */
+export function setOnboardingCompleted(completed: boolean): Promise<void> {
+  return invoke("set_onboarding_completed", { completed });
+}
+
 /** Set the close button behavior: "hide" or "quit" */
 export function setCloseButtonBehavior(behavior: string): Promise<void> {
   return invoke("set_close_button_behavior", { behavior });
@@ -1141,6 +1202,19 @@ export function setCloseButtonBehavior(behavior: string): Promise<void> {
 /** Get the close button behavior setting */
 export function getCloseButtonBehavior(): Promise<string> {
   return invoke("get_close_button_behavior");
+}
+
+// ============ Menu Bar Commands ============
+
+/** 菜单栏主文本：今日 Tokens 简写 / 今日 Top1 工具 / 今日 Top1 模型（三选一固定展示） */
+export type MenuBarMainText = "tokens" | "top1_tool" | "top1_model";
+
+export function getMenuBarMainText(): Promise<MenuBarMainText> {
+  return invoke("get_menu_bar_main_text");
+}
+
+export function setMenuBarMainText(mainText: MenuBarMainText): Promise<void> {
+  return invoke("set_menu_bar_main_text", { mainText });
 }
 
 // ============ Client Key Commands (virtual keys → route pools) ============

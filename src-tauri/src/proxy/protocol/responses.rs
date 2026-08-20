@@ -47,9 +47,11 @@ pub fn normalize_sse_event(protocols: &[String], event_block: &str) -> Option<St
     }
     let data = data_lines.join("\n");
     if data == "[DONE]" {
-        return Some(
-            "event: response.completed\ndata: {\"type\":\"response.completed\"}\n\n".into(),
-        );
+        // Converted streams get a synthetic `response.completed` carrying the
+        // re-encoded usage when the upstream stream ends (see
+        // `forward_responses_sse_with_context`); forwarding a bare one here
+        // would end the client stream with no usage information.
+        return None;
     }
     let value = serde_json::from_str::<Value>(&data).ok()?;
     let text = match kind {
@@ -100,21 +102,35 @@ pub fn normalize_sse_event(protocols: &[String], event_block: &str) -> Option<St
 }
 
 /// Normalize an upstream SSE byte stream into Responses API events.
+/// Returns the normalized events, the first downstream error message detected
+/// in any complete event block, and whether the upstream sent its terminal
+/// `[DONE]` marker (only Chat-style streams do; Anthropic/Gemini just close).
 pub fn normalize_sse_stream(
     protocols: &[String],
     chunk: &[u8],
     buffer: &mut String,
-) -> Vec<bytes::Bytes> {
+) -> (Vec<bytes::Bytes>, Option<String>, bool) {
     buffer.push_str(&String::from_utf8_lossy(chunk));
     let mut events = Vec::new();
+    let mut error = None;
+    let mut done = false;
     while let Some(index) = buffer.find("\n\n") {
         let block = buffer[..index].to_string();
         *buffer = buffer[index + 2..].to_string();
+        if error.is_none() {
+            error = crate::proxy::protocol::sse_event_error(&block);
+        }
+        if block.lines().any(|line| {
+            line.strip_prefix("data:")
+                .is_some_and(|data| data.trim() == "[DONE]")
+        }) {
+            done = true;
+        }
         if let Some(event) = normalize_sse_event(protocols, &block) {
             events.push(bytes::Bytes::from(event));
         }
     }
-    events
+    (events, error, done)
 }
 
 /// Stream an upstream SSE response incrementally and translate native events
@@ -143,6 +159,13 @@ pub fn forward_responses_sse_with_context(
         let mut usage = crate::proxy::protocol::Usage::default();
         let mut completion_error = None;
         let mut completed = false;
+        // Converted streams (chat/anthropic/gemini upstream) never emit a
+        // native `response.completed`; the gateway synthesizes one at stream
+        // end carrying the usage re-encoded into the Responses vocabulary.
+        let upstream_converted = !matches!(
+            upstream_kind(&protocols),
+            UpstreamKind::Responses | UpstreamKind::Unsupported
+        );
         loop {
             let chunk_result = tokio::select! {
                 _ = tx.closed() => {
@@ -175,11 +198,23 @@ pub fn forward_responses_sse_with_context(
                 }
             };
             crate::proxy::stream::collect_sse_usage(&chunk, &mut usage_buffer, &mut usage);
-            for event in normalize_sse_stream(&protocols, &chunk, &mut buffer) {
+            let (events, stream_error, done) = normalize_sse_stream(&protocols, &chunk, &mut buffer);
+            for event in events {
                 if tx.send(event).await.is_err() {
                     completion_error = Some("downstream disconnected before SSE completion".into());
                     break;
                 }
+            }
+            // Upstream ended the 200 stream with an error event: record the
+            // downstream-provided message instead of logging a silent success.
+            if let Some(message) = stream_error {
+                completion_error = Some(message);
+                break;
+            }
+            // Chat-style upstream sent its terminal [DONE] marker.
+            if done && completion_error.is_none() {
+                completed = true;
+                break;
             }
             if completion_error.is_some() {
                 break;
@@ -198,6 +233,30 @@ pub fn forward_responses_sse_with_context(
                         completion_error =
                             Some("downstream disconnected before SSE completion".into());
                     }
+                }
+            }
+            if upstream_converted && completion_error.is_none() {
+                // Synthetic completion event: the client (e.g. Codex CLI)
+                // expects `response.completed` with a Responses-shaped usage
+                // object, so cache tokens survive the protocol hop.
+                let mut response = serde_json::Map::new();
+                if usage.available {
+                    response.insert(
+                        "usage".into(),
+                        usage.to_responses_usage_json(),
+                    );
+                }
+                let payload = serde_json::json!({
+                    "type": "response.completed",
+                    "response": serde_json::Value::Object(response),
+                });
+                let event = format!(
+                    "event: response.completed\ndata: {}\n\n",
+                    payload
+                );
+                if tx.send(bytes::Bytes::from(event)).await.is_err() {
+                    completion_error =
+                        Some("downstream disconnected before SSE completion".into());
                 }
             }
         }
@@ -355,8 +414,8 @@ pub fn normalize_response(protocols: &[String], raw: &str) -> String {
     }
 }
 
-fn wrap_output(content: Option<&Value>) -> String {
-    let out = serde_json::json!({
+fn wrap_output(content: Option<&Value>, usage: Option<Value>) -> String {
+    let mut out = serde_json::json!({
         "object": "response",
         "output": [{
             "type": "message",
@@ -364,14 +423,27 @@ fn wrap_output(content: Option<&Value>) -> String {
             "content": [{ "type": "output_text", "text": content }]
         }]
     });
+    // Re-encode the upstream usage into the Responses vocabulary so cache
+    // tokens survive the protocol hop (canonical caliber → input total +
+    // input_tokens_details.cached_tokens).
+    if let Some(usage) = usage {
+        if let Some(object) = out.as_object_mut() {
+            object.insert("usage".into(), usage);
+        }
+    }
     out.to_string()
 }
 
 fn chat_to_responses(v: &Value) -> String {
     // {"choices":[{"message":{"content":"..."}}]}
+    let usage = v
+        .get("usage")
+        .map(crate::proxy::protocol::Usage::from_openai_usage)
+        .filter(|usage| usage.available)
+        .map(|usage| usage.to_responses_usage_json());
     if let Some(choices) = v.get("choices").and_then(|c| c.as_array()) {
         if let Some(first) = choices.first() {
-            return wrap_output(first.get("message").and_then(|m| m.get("content")));
+            return wrap_output(first.get("message").and_then(|m| m.get("content")), usage);
         }
     }
     v.to_string()
@@ -379,19 +451,29 @@ fn chat_to_responses(v: &Value) -> String {
 
 fn anthropic_to_responses(v: &Value) -> String {
     // {"content":[{"type":"text","text":"..."}]}
+    let usage = v
+        .get("usage")
+        .map(crate::proxy::protocol::Usage::from_anthropic_usage)
+        .filter(|usage| usage.available)
+        .map(|usage| usage.to_responses_usage_json());
     if let Some(content) = v.get("content").and_then(|c| c.as_array()) {
         if let Some(first) = content.first() {
-            return wrap_output(first.get("text"));
+            return wrap_output(first.get("text"), usage);
         }
     }
     v.to_string()
 }
 
 fn gemini_to_responses(v: &Value) -> String {
-    // {"candidates":[{"content":{"parts":[{"text":"..."}]}}]}
+    // {"candidates":[{"content":{"parts":[{"text":"..."}}]}}]
     // Antigravity (Cloud Code v1internal) wraps the same payload in
     // `{"response": {...}}`; unwrap transparently.
     let v = v.get("response").unwrap_or(v);
+    let usage = v
+        .get("usageMetadata")
+        .map(crate::proxy::protocol::Usage::from_gemini_metadata)
+        .filter(|usage| usage.available)
+        .map(|usage| usage.to_responses_usage_json());
     if let Some(cands) = v.get("candidates").and_then(|c| c.as_array()) {
         if let Some(first) = cands.first() {
             let text = first
@@ -400,7 +482,7 @@ fn gemini_to_responses(v: &Value) -> String {
                 .and_then(|p| p.as_array())
                 .and_then(|p| p.first())
                 .and_then(|p| p.get("text"));
-            return wrap_output(text);
+            return wrap_output(text, usage);
         }
     }
     v.to_string()
@@ -442,16 +524,54 @@ mod tests {
     fn handles_sse_events_split_across_chunks() {
         let protocols = vec!["chat".into()];
         let mut buffer = String::new();
-        assert!(normalize_sse_stream(
+        let (events, error, done) = normalize_sse_stream(
             &protocols,
-            br#"data: {"choices":[{"delta":{"content":"hel"#,
+            b"data: {\"choices\":[{\"delta\":{\"content\":\"hel",
             &mut buffer,
-        )
-        .is_empty());
-        let events = normalize_sse_stream(&protocols, b"lo\"}}]}\n\n", &mut buffer);
+        );
+        assert!(events.is_empty());
+        assert!(error.is_none());
+        assert!(!done);
+        let (events, error, done) =
+            normalize_sse_stream(&protocols, b"lo\"}}]}\n\n", &mut buffer);
         assert_eq!(events.len(), 1);
+        assert!(error.is_none());
+        assert!(!done);
         assert!(String::from_utf8_lossy(&events[0]).contains(r#""delta":"hello""#));
         assert!(buffer.is_empty());
+    }
+
+    #[test]
+    fn chat_done_marker_is_reported_and_not_forwarded() {
+        // The [DONE] marker must be surfaced (so the stream loop can end and
+        // synthesize the completion event) without forwarding a bare
+        // completion that carries no usage.
+        let protocols = vec!["chat".into()];
+        let mut buffer = String::new();
+        let (events, error, done) =
+            normalize_sse_stream(&protocols, b"data: [DONE]\n\n", &mut buffer);
+        assert!(events.is_empty());
+        assert!(error.is_none());
+        assert!(done);
+    }
+
+    #[test]
+    fn detects_upstream_error_events_in_sse_stream() {
+        let protocols = vec!["responses".into()];
+        let mut buffer = String::new();
+        let (events, error, done) = normalize_sse_stream(
+            &protocols,
+            concat!(
+                "event: error\n",
+                r#"data: {"type":"error","code":"overloaded_error","message":"Overloaded"}"#,
+                "\n\n"
+            )
+            .as_bytes(),
+            &mut buffer,
+        );
+        assert_eq!(events.len(), 1);
+        assert_eq!(error.as_deref(), Some("Overloaded"));
+        assert!(!done);
     }
 
     #[test]
@@ -492,5 +612,47 @@ mod tests {
         // OpenAI-only fields must not leak to the Gemini upstream.
         assert!(converted.get("messages").is_none());
         assert!(converted.get("input").is_none());
+    }
+
+    #[test]
+    fn chat_response_reencodes_usage_into_responses_vocabulary() {
+        let protocols = vec!["chat".into()];
+        let raw = r#"{"choices":[{"message":{"content":"hi"}}],"usage":{"prompt_tokens":12,"completion_tokens":7,"prompt_tokens_details":{"cached_tokens":3}}}"#;
+        let normalized = normalize_response(&protocols, raw);
+        assert!(normalized.contains(r#""object":"response""#));
+        // 12 - 3 cached = 9 fresh + 3 cached folded back into the total.
+        assert!(normalized.contains(r#""input_tokens":12"#));
+        assert!(normalized.contains(r#""cached_tokens":3"#));
+        assert!(normalized.contains(r#""output_tokens":7"#));
+    }
+
+    #[test]
+    fn anthropic_response_reencodes_cache_split_into_responses_vocabulary() {
+        let protocols = vec!["anthropic".into()];
+        let raw = r#"{"content":[{"type":"text","text":"hi"}],"usage":{"input_tokens":20,"output_tokens":8,"cache_read_input_tokens":5,"cache_creation_input_tokens":2}}"#;
+        let normalized = normalize_response(&protocols, raw);
+        // Anthropic fresh input (20) + read (5) + write (2) = Responses input
+        // total 27; only the read side counts as cached for OpenAI clients.
+        assert!(normalized.contains(r#""input_tokens":27"#));
+        assert!(normalized.contains(r#""cached_tokens":5"#));
+        assert!(normalized.contains(r#""output_tokens":8"#));
+    }
+
+    #[test]
+    fn gemini_response_reencodes_usage_into_responses_vocabulary() {
+        let protocols = vec!["gemini".into()];
+        let raw = r#"{"candidates":[{"content":{"parts":[{"text":"ok"}]}}],"usageMetadata":{"promptTokenCount":11,"candidatesTokenCount":6,"cachedContentTokenCount":1}}"#;
+        let normalized = normalize_response(&protocols, raw);
+        assert!(normalized.contains(r#""input_tokens":11"#));
+        assert!(normalized.contains(r#""cached_tokens":1"#));
+        assert!(normalized.contains(r#""output_tokens":6"#));
+    }
+
+    #[test]
+    fn responses_without_usage_omit_the_usage_node() {
+        let protocols = vec!["chat".into()];
+        let raw = r#"{"choices":[{"message":{"content":"hi"}}]}"#;
+        let normalized = normalize_response(&protocols, raw);
+        assert!(!normalized.contains(r#""usage""#));
     }
 }

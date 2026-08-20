@@ -49,8 +49,7 @@ pub async fn copilot_pat_validate(github_pat: String) -> Result<CopilotValidatio
     let copilot_token = copilot_adapter::exchange_github_token_for_copilot(&github_pat).await?;
 
     // The token is valid if we get here. Calculate expiry.
-    let expires_at = (chrono::Utc::now() + chrono::Duration::seconds(25 * 60 - 30))
-        .to_rfc3339();
+    let expires_at = (chrono::Utc::now() + chrono::Duration::seconds(25 * 60 - 30)).to_rfc3339();
 
     Ok(CopilotValidation {
         valid: true,
@@ -114,10 +113,12 @@ pub async fn gemini_api_key_validate(api_key: String) -> Result<GeminiValidation
 
     let result = gemini_adapter::check_gemini_health(&account).await;
     match result {
-        crate::services::health_check::HealthResult::Passed { latency_ms } => Ok(GeminiValidation {
-            valid: true,
-            message: format!("API Key 验证成功，延迟 {}ms", latency_ms),
-        }),
+        crate::services::health_check::HealthResult::Passed { latency_ms } => {
+            Ok(GeminiValidation {
+                valid: true,
+                message: format!("API Key 验证成功，延迟 {}ms", latency_ms),
+            })
+        }
         crate::services::health_check::HealthResult::Failed { code, body } => Err(format!(
             "API Key 验证失败 (HTTP {}): {}",
             code,
@@ -126,7 +127,9 @@ pub async fn gemini_api_key_validate(api_key: String) -> Result<GeminiValidation
         crate::services::health_check::HealthResult::Timeout => {
             Err("API Key 验证超时，请检查网络".into())
         }
-        crate::services::health_check::HealthResult::Error(msg) => Err(format!("验证出错: {}", msg)),
+        crate::services::health_check::HealthResult::Error(msg) => {
+            Err(format!("验证出错: {}", msg))
+        }
     }
 }
 
@@ -224,8 +227,12 @@ pub async fn complete_gemini_oauth(
     login_id: String,
     callback_url: Option<String>,
 ) -> Result<crate::db::accounts::Account, String> {
-    crate::services::oauth_gemini::complete_gemini_oauth(state.inner().clone(), &login_id, callback_url)
-        .await
+    crate::services::oauth_gemini::complete_gemini_oauth(
+        state.inner().clone(),
+        &login_id,
+        callback_url,
+    )
+    .await
 }
 
 /// Cancel a pending Gemini OAuth flow.
@@ -338,8 +345,12 @@ pub async fn complete_claude_oauth(
     login_id: String,
     callback_url: Option<String>,
 ) -> Result<crate::db::accounts::Account, String> {
-    crate::services::oauth_claude::complete_claude_oauth(state.inner().clone(), &login_id, callback_url)
-        .await
+    crate::services::oauth_claude::complete_claude_oauth(
+        state.inner().clone(),
+        &login_id,
+        callback_url,
+    )
+    .await
 }
 
 /// Cancel a pending Claude Code OAuth flow.

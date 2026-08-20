@@ -2,6 +2,7 @@ pub mod commands;
 pub mod db;
 pub mod proxy;
 pub mod services;
+pub mod token_monitor;
 
 use std::sync::Arc;
 use tauri::Manager;
@@ -14,6 +15,8 @@ pub struct ProxyHandle {
     pub shutdown_tx: oneshot::Sender<()>,
     /// Port the server bound to.
     pub port: u16,
+    /// Listen mode the running server bound with (localhost / lan).
+    pub listen_mode: crate::proxy::server::ListenMode,
 }
 
 /// Shared application state
@@ -37,6 +40,9 @@ pub struct AppState {
     /// Shared per-account semaphore registry. Keeping it in AppState allows the
     /// provider inspector to report real active, available and queued capacity.
     pub account_concurrency: proxy::concurrency::AccountConcurrency,
+    /// Per-account request pacing (spacing + jitter) for subscription/OAuth
+    /// upstreams; shared between the proxy handlers and the app runtime.
+    pub account_throttle: proxy::concurrency::AccountThrottle,
     /// Serializes configuration and restore operations per Agent application.
     /// A set is used instead of exposing arbitrary process commands to the UI.
     pub agent_app_operations: std::sync::Mutex<std::collections::HashSet<String>>,
@@ -44,6 +50,9 @@ pub struct AppState {
     /// need the path (e.g. log file readers) can access it without holding
     /// an AppHandle.
     pub app_data_dir: Option<std::path::PathBuf>,
+    // ==== token_monitor: state ====
+    /// Token Monitor 运行时（W0 占位；W1 填充聚合/快照/事件广播，W2 填充采集调度）。
+    pub token_monitor: token_monitor::TokenMonitorRuntime,
 }
 
 /// Initialise tracing with a dual-layer subscriber: stdout for development,
@@ -128,18 +137,30 @@ pub fn run() {
                 proxy: std::sync::Mutex::new(None),
                 gateway_runtime: proxy::runtime::GatewayRuntime::default(),
                 account_concurrency: proxy::concurrency::AccountConcurrency::default(),
+                account_throttle: proxy::concurrency::AccountThrottle::default(),
                 agent_app_operations: std::sync::Mutex::new(std::collections::HashSet::new()),
                 app_data_dir: Some(app_data_dir.clone()),
+                token_monitor: token_monitor::TokenMonitorRuntime::default(),
             }));
 
-            // Spawn the background OAuth token refresh loop, sharing the managed
-            // AppState (and its single DB connection) so it never opens a
-            // competing SQLite handle. Without this, OAuth/token accounts would
-            // silently expire and drop out of the routable pool.
+            // ==== token_monitor: setup ====
+            // Start the Token Monitor service (W0: empty; W1 aggregates/snapshots,
+            // W2 starts the watcher/polling loops). It lives on AppState, not the
+            // ProxyHandle, so it keeps running when the gateway is stopped.
+            {
+                let tm_state = app.state::<Arc<AppState>>().inner().clone();
+                token_monitor::init(app.handle(), tm_state)?;
+            }
+
+            // Gateway-only background work is not started in Monitor mode. The
+            // Token Monitor collector above remains independent and continues
+            // to run in either product mode.
             let state = app.state::<Arc<AppState>>().inner().clone();
-            tauri::async_runtime::spawn(async move {
-                services::token_refresh::refresh_loop(state).await;
-            });
+            if !commands::settings_commands::is_monitor_mode(&state)? {
+                tauri::async_runtime::spawn(async move {
+                    services::token_refresh::refresh_loop(state).await;
+                });
+            }
 
             // Forward the in-memory route lifecycle to both the command center
             // and tray webviews. Events are merged on a 250ms window so the UI
@@ -177,12 +198,38 @@ pub fn run() {
             // Initialize tray
             services::tray::setup_tray(app)?;
 
-            // Configure main window close behavior based on settings
+            // Configure main window close behavior based on settings, and react
+            // to system appearance changes by re-rendering the menu bar icon
+            // (浅色/深色菜单栏 → 深色/近白云朵-P Logo).
             if let Some(main_window) = app.get_webview_window("main") {
                 let main_window_clone = main_window.clone();
                 let app_state_clone = app.state::<Arc<AppState>>().inner().clone();
-                main_window.on_window_event(move |event| {
-                    if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                let menu_bar_app = app.handle().clone();
+
+                // 主窗口也使用原生 Liquid Glass：CSS 透明层只负责 tint，
+                // vibrancy 负责磨砂桌面/壁纸。托盘窗口在 tray.rs 中使用同一材质。
+                #[cfg(target_os = "macos")]
+                {
+                    use window_vibrancy::{apply_vibrancy, NSVisualEffectMaterial, NSVisualEffectState};
+                    let _ = apply_vibrancy(
+                        &main_window,
+                        NSVisualEffectMaterial::HudWindow,
+                        Some(NSVisualEffectState::Active),
+                        Some(28.0),
+                    );
+                }
+                #[cfg(target_os = "windows")]
+                {
+                    use window_vibrancy::apply_acrylic;
+                    let tint = match main_window.theme() {
+                        Ok(tauri::Theme::Dark) => (26, 30, 36, 120),
+                        _ => (246, 248, 252, 112),
+                    };
+                    let _ = apply_acrylic(&main_window, Some(tint));
+                }
+
+                main_window.on_window_event(move |event| match event {
+                    tauri::WindowEvent::CloseRequested { api, .. } => {
                         // Check the close button behavior setting
                         let close_behavior = app_state_clone
                             .db
@@ -205,6 +252,38 @@ pub fn run() {
                             let _ = main_window_clone.hide();
                         }
                     }
+                    tauri::WindowEvent::ThemeChanged(theme) => {
+                        #[cfg(target_os = "windows")]
+                        {
+                            use window_vibrancy::apply_acrylic;
+                            let tint = match theme {
+                                tauri::Theme::Dark => (26, 30, 36, 120),
+                                _ => (246, 248, 252, 112),
+                            };
+                            let _ = apply_acrylic(&main_window_clone, Some(tint));
+                        }
+                        // 系统外观切换（macOS 菜单栏浅色 ↔ 深色，或 Windows 应用
+                        // 模式切换）时立即重绘菜单栏图标，不必等 10s 刷新循环。
+                        // 使用传入的 `theme` 而非 `apply_menu_bar` 重新读窗口：
+                        // 事件载荷是 Tauri 从 NSAppleInterfaceThemeChanged
+                        // 实时发布的，比 `window.theme()` 更稳。
+                        let appearance = match theme {
+                            tauri::Theme::Dark => {
+                                crate::services::menu_bar::Appearance::Dark
+                            }
+                            _ => crate::services::menu_bar::Appearance::Light,
+                        };
+                        if let Err(error) = crate::services::menu_bar::apply_menu_bar_with_appearance(
+                            &menu_bar_app,
+                            &app_state_clone,
+                            appearance,
+                        ) {
+                            tracing::warn!(
+                                "menu bar refresh on theme change failed: {error}"
+                            );
+                        }
+                    }
+                    _ => {}
                 });
             }
 
@@ -295,6 +374,7 @@ pub fn run() {
             commands::proxy_commands::start_proxy,
             commands::proxy_commands::stop_proxy,
             commands::proxy_commands::get_proxy_status,
+            commands::proxy_commands::get_lan_addresses,
             // Import commands
             commands::import_commands::preview_import,
             commands::import_commands::preview_import_source,
@@ -313,8 +393,15 @@ pub fn run() {
             // Settings commands
             commands::settings_commands::get_gateway_settings,
             commands::settings_commands::set_gateway_access_key,
+            commands::settings_commands::get_app_mode,
+            commands::settings_commands::set_app_mode,
+            commands::settings_commands::get_onboarding_state,
+            commands::settings_commands::set_onboarding_completed,
             commands::settings_commands::set_close_button_behavior,
             commands::settings_commands::get_close_button_behavior,
+            commands::settings_commands::set_appearance_prefs,
+            commands::settings_commands::get_menu_bar_main_text,
+            commands::settings_commands::set_menu_bar_main_text,
             // Client key commands
             commands::client_key_commands::create_client_key,
             commands::client_key_commands::list_client_keys,
@@ -322,6 +409,37 @@ pub fn run() {
             commands::client_key_commands::delete_client_key,
             commands::client_key_commands::set_client_key_pools,
             commands::client_key_commands::get_client_key_pools,
+            // ==== token_monitor commands ====
+            commands::token_monitor_commands::get_token_monitor_snapshot,
+            commands::token_monitor_commands::list_tool_usage,
+            commands::token_monitor_commands::list_model_usage,
+            commands::token_monitor_commands::list_active_sessions,
+            commands::token_monitor_commands::list_session_events,
+            commands::token_monitor_commands::list_projects,
+            commands::token_monitor_commands::get_usage_trend,
+            commands::token_monitor_commands::list_devices,
+            commands::token_monitor_commands::get_collector_status,
+            commands::token_monitor_commands::set_tool_collection,
+            commands::token_monitor_commands::set_tool_paths,
+            commands::token_monitor_commands::rescan_tool,
+            commands::token_monitor_commands::reset_tool_data,
+            commands::token_monitor_commands::scan_all_tools,
+            commands::token_monitor_commands::get_token_rate,
+            commands::token_monitor_commands::get_service_status,
+            commands::token_monitor_commands::refresh_token_monitor,
+            commands::token_monitor_commands::list_quota_accounts,
+            commands::token_monitor_commands::get_account_token_stats,
+            commands::token_monitor_commands::list_quota_providers,
+            commands::token_monitor_commands::add_quota_account,
+            commands::token_monitor_commands::refresh_quota_account,
+            commands::token_monitor_commands::remove_quota_account,
+            commands::token_monitor_commands::set_quota_alert_thresholds,
+            commands::token_monitor_commands::get_token_monitor_tray_snapshot,
+            commands::token_monitor_commands::get_tray_primary_metric,
+            commands::token_monitor_commands::add_custom_app,
+            commands::token_monitor_commands::remove_custom_app,
+            commands::token_monitor_commands::detect_local_agents,
+            commands::token_monitor_commands::enable_tool_monitoring,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

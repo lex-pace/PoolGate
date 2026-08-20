@@ -305,7 +305,9 @@ fn persist_grok_account(
                 name: "xAI Grok".into(),
                 provider_type: "xai".into(),
                 base_url: "https://api.x.ai".into(),
-                base_urls: Some("{\"chat\":\"https://api.x.ai\",\"responses\":\"https://api.x.ai\"}".into()),
+                base_urls: Some(
+                    "{\"chat\":\"https://api.x.ai\",\"responses\":\"https://api.x.ai\"}".into(),
+                ),
                 protocol: "openai".into(),
                 protocols: Some("[\"chat\",\"responses\"]".into()),
                 route_takeover: Some(1),
@@ -318,13 +320,16 @@ fn persist_grok_account(
                 enabled: Some(true),
                 created_at: None,
                 auth_mode: Some("oauth_pkce".into()),
-                oauth_config: Some(serde_json::json!({
-                    "authorize_url": XAI_AUTHORIZE_URL,
-                    "token_url": XAI_TOKEN_URL,
-                    "client_id": GROK_CLIENT_ID,
-                    "scope": GROK_SCOPE,
-                    "redirect_port": 1818
-                }).to_string()),
+                oauth_config: Some(
+                    serde_json::json!({
+                        "authorize_url": XAI_AUTHORIZE_URL,
+                        "token_url": XAI_TOKEN_URL,
+                        "client_id": GROK_CLIENT_ID,
+                        "scope": GROK_SCOPE,
+                        "redirect_port": 1818
+                    })
+                    .to_string(),
+                ),
             },
         )?;
     }
@@ -372,12 +377,14 @@ fn persist_grok_account(
 
     // Auto-add to routing pool.
     // provider_id was moved into account.provider_id, so read it from account.
-    let provider = state.db.providers.get_by_id(
-        &state.db.conn,
-        account.provider_id.as_deref().unwrap_or(""),
-    )?
-    .ok_or_else(|| "Provider not found after creation".to_string())?;
-    let models: Vec<String> = provider.models.as_deref()
+    let provider = state
+        .db
+        .providers
+        .get_by_id(&state.db.conn, account.provider_id.as_deref().unwrap_or(""))?
+        .ok_or_else(|| "Provider not found after creation".to_string())?;
+    let models: Vec<String> = provider
+        .models
+        .as_deref()
         .and_then(|raw| serde_json::from_str(raw).ok())
         .unwrap_or_default();
     crate::services::pool_onboarding::ensure_account_in_pool(

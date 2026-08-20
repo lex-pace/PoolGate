@@ -7,6 +7,8 @@ export interface HeatmapDay {
   date: string;
   tokens: number;
   requests: number;
+  /** Optional per-day cost (USD) for the "cost" metric. */
+  cost?: number;
 }
 
 const BLUE = "10,132,255";
@@ -88,7 +90,13 @@ export default function ActivityHeatmap({
   align = "start",
   compact = false,
   fill = false,
+  metric = "tokens",
+  minCellSize,
+  maxCellSize,
+  windowEnd,
+  windowDays = 365,
   className = "",
+  onCellClick,
 }: {
   data: HeatmapDay[];
   cellSize?: number;
@@ -100,7 +108,18 @@ export default function ActivityHeatmap({
   align?: "start" | "center" | "end";
   compact?: boolean;
   fill?: boolean;
+  /** 着色指标：tokens 用量 或 cost 成本（无 cost 数据的日期按 0 处理）。 */
+  metric?: "tokens" | "cost";
+  /** fill 模式下的小格尺寸下限/上限：数据少时拉大填满，数据多时保持最小尺寸并可横向滚动。 */
+  minCellSize?: number;
+  maxCellSize?: number;
+  /** 锚定窗口右端（本地 YYYY-MM-DD，通常为今天）：今天固定在最右下角，
+   *  从窗口右端往前推 windowDays 天；若数据早于窗口起点则延伸到首次有数据的时间。 */
+  windowEnd?: string;
+  windowDays?: number;
   className?: string;
+  /** 点击任意小格时回调（托盘用于跳转趋势页）。 */
+  onCellClick?: (day: HeatmapDay) => void;
 }) {
   const gridRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -119,6 +138,31 @@ export default function ActivityHeatmap({
 
   const visibleData = useMemo(() => {
     const sorted = [...data].sort((a, b) => a.date.localeCompare(b.date));
+
+    // 锚定窗口：右端固定为今天，从今天往前推 windowDays 天；数据早于窗口起点时
+    // 延伸到首次有数据的时间。窗口总天数取 7 的倍数 → 无任何留白格：
+    // 起始格 = 左上角第一格，今天 = 右下角最后一格。
+    if (windowEnd && sorted.length) {
+      const dataMap = new Map(sorted.map((day) => [day.date, day]));
+      const end = parseDay(windowEnd);
+      let start = new Date(end);
+      start.setDate(start.getDate() - Math.max(1, windowDays - 1));
+      start.setHours(0, 0, 0, 0);
+      const first = parseDay(sorted[0].date);
+      if (first.getTime() < start.getTime()) start.setTime(first.getTime());
+      const span = Math.round((end.getTime() - start.getTime()) / 86400000) + 1;
+      const total = Math.ceil(span / 7) * 7;
+      start = new Date(end);
+      start.setDate(start.getDate() - (total - 1));
+      start.setHours(0, 0, 0, 0);
+      return Array.from({ length: total }, (_, index) => {
+        const date = new Date(start);
+        date.setDate(start.getDate() + index);
+        const key = formatDateKey(date);
+        return dataMap.get(key) || { date: key, tokens: 0, requests: 0 };
+      });
+    }
+
     if (!maxWeeks || !sorted.length) return sorted;
 
     const dataMap = new Map(sorted.map((day) => [day.date, day]));
@@ -132,14 +176,24 @@ export default function ActivityHeatmap({
       const key = formatDateKey(date);
       return dataMap.get(key) || { date: key, tokens: 0, requests: 0 };
     });
-  }, [data, maxWeeks]);
+  }, [data, maxWeeks, windowEnd, windowDays]);
 
   const layout = useMemo(() => {
     if (!visibleData.length) return { pad: 0, weeks: 0 };
+    // windowEnd 锚定模式：完整矩形（无前导空格），week = 行数恰好 7 的整除数
+    if (windowEnd) return { pad: 0, weeks: Math.round(visibleData.length / 7) };
     const pad = (parseDay(visibleData[0].date).getDay() + 6) % 7;
     const weeks = Math.ceil((visibleData.length + pad) / 7);
     return { pad, weeks };
-  }, [visibleData]);
+  }, [visibleData, windowEnd]);
+
+  // align="end"：默认滚动到最右端（今天/最新数据），对齐开源 Token Monitor 的活动展示。
+  // 网格比容器宽时 justify-content 无效，需显式设置 scrollLeft。
+  useEffect(() => {
+    const node = scrollRef.current;
+    if (!node || align !== "end") return;
+    node.scrollLeft = node.scrollWidth;
+  }, [align, layout.weeks, visibleData.length, containerWidth]);
 
   const cells = useMemo(() => {
     if (!visibleData.length) return [] as GridCell[];
@@ -149,7 +203,8 @@ export default function ActivityHeatmap({
         const index = week * 7 + weekday - layout.pad;
         if (index >= 0 && index < visibleData.length) {
           cells.push({ day: visibleData[index], key: visibleData[index].date });
-        } else {
+        } else if (index < 0) {
+          // 仅起始列在开头补空格；最后列不补尾部空格 → 今天就是最右下角一格（GitHub 风格）
           cells.push({ day: null, key: `empty-${week}-${weekday}` });
         }
       }
@@ -172,7 +227,11 @@ export default function ActivityHeatmap({
     return markers;
   }, [cells, layout.weeks]);
 
-  const maxTokens = useMemo(() => visibleData.reduce((max, day) => Math.max(max, day.tokens), 0), [visibleData]);
+  const metricValue = (day: HeatmapDay) => (metric === "cost" ? (day.cost ?? 0) : day.tokens);
+  const maxTokens = useMemo(
+    () => visibleData.reduce((max, day) => Math.max(max, metricValue(day)), 0),
+    [visibleData],
+  );
   const labelWidth = showLabels ? 22 : 0;
   const focusSafeArea = compact ? 4 : 6;
   const availableGridWidth = Math.max(0, containerWidth - labelWidth - focusSafeArea * 2);
@@ -181,7 +240,10 @@ export default function ActivityHeatmap({
     : cellSize;
   const fittedGap = fill && layout.weeks > 0 && fittedCellSize <= 4 ? 1 : gap;
   const resolvedCellSize = fill && layout.weeks > 0
-    ? Math.max(3, (availableGridWidth - Math.max(0, layout.weeks - 1) * fittedGap) / layout.weeks)
+    ? Math.min(
+        maxCellSize ?? Number.POSITIVE_INFINITY,
+        Math.max(minCellSize ?? 3, (availableGridWidth - Math.max(0, layout.weeks - 1) * fittedGap) / layout.weeks),
+      )
     : cellSize;
   const gridWidth = layout.weeks * resolvedCellSize + Math.max(0, layout.weeks - 1) * fittedGap;
 
@@ -207,7 +269,8 @@ export default function ActivityHeatmap({
       {showLegend && <HeatmapLegend compact={compact} />}
       <div ref={scrollRef} className={`pg-heatmap-scroll align-${align} ${fill ? "fill" : ""}`}>
         <div className="pg-heatmap-layout">
-          {showLabels && (
+          {/* 锚定窗口模式行不再是自然星期对齐，隐藏星期标签；月份标签仍按真实日期保留 */}
+          {showLabels && !windowEnd && (
             <div className="pg-heatmap-weekdays" style={{ gap: fittedGap }} aria-hidden="true">
               {["一", "", "三", "", "五", "", "日"].map((label, index) => (
                 <span key={index} style={{ height: resolvedCellSize, lineHeight: `${resolvedCellSize}px` }}>{label}</span>
@@ -233,8 +296,11 @@ export default function ActivityHeatmap({
               {cells.map((cell) => {
                 const day = cell.day;
                 if (!day) return <span key={cell.key} className="pg-heatmap-empty" />;
-                const level = heatLevel(day.tokens, maxTokens);
-                const label = `${formatDateZh(day.date)}，${formatTokensZh(day.tokens)} Tokens，${day.requests} 次请求`;
+                const level = heatLevel(metricValue(day), maxTokens);
+                const valueText = metric === "cost"
+                  ? `$${day.cost != null ? day.cost.toFixed(2) : "0.00"} 成本`
+                  : `${formatTokensZh(day.tokens)} Tokens`;
+                const label = `${formatDateZh(day.date)}，${valueText}，${day.requests} 次请求`;
                 return (
                   <button
                     key={cell.key}
@@ -245,6 +311,7 @@ export default function ActivityHeatmap({
                     onMouseEnter={(event) => handleMove(day, event)}
                     onMouseMove={(event) => handleMove(day, event)}
                     onMouseLeave={() => setHover(null)}
+                    onClick={() => onCellClick?.(day)}
                     onFocus={(event) => {
                       const rect = event.currentTarget.getBoundingClientRect();
                       const gridRect = gridRef.current?.getBoundingClientRect();
@@ -271,8 +338,7 @@ export default function ActivityHeatmap({
             {hover && !compact && (
               <div className="pg-heatmap-tooltip" style={{ left: tooltipLeft, top: tooltipTop }}>
                 <strong>{formatDateZh(hover.day.date)}</strong>
-                <span>{formatTokensZh(hover.day.tokens)} Tokens</span>
-                <em>{hover.day.requests} 次请求</em>
+                <span>{metric === "cost" ? `$${(hover.day.cost ?? 0).toFixed(2)} 成本` : `${formatTokensZh(hover.day.tokens)} Tokens`}</span>
               </div>
             )}
             {hover && compact && createPortal(
@@ -285,8 +351,7 @@ export default function ActivityHeatmap({
                 }}
               >
                 <strong>{formatDateZh(hover.day.date)}</strong>
-                <span>{formatTokensZh(hover.day.tokens)} Tokens</span>
-                <em>{hover.day.requests} 次</em>
+                <span>{metric === "cost" ? `$${(hover.day.cost ?? 0).toFixed(2)} 成本` : `${formatTokensZh(hover.day.tokens)} Tokens`}</span>
               </div>,
               document.body,
             )}

@@ -114,6 +114,51 @@ mod sticky_counter {
     }
 }
 
+/// Session-level account affinity (conversation stickiness).
+///
+/// Upstream prompt caches are scoped per (account, model); spreading one
+/// conversation across accounts destroys every cache entry and multiplies
+/// cost. Provider risk models also expect one human on one machine to keep
+/// using one identity, so affinity doubles as a risk-control signal. The key
+/// comes from a client-provided session header or a hash of the conversation's
+/// first user message (see `session_affinity_key` in the proxy server).
+mod session_affinity {
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+    use std::time::{Duration, Instant};
+
+    /// Affinity entries expire so long-idle conversations stop pinning an
+    /// account that may since have left the pool.
+    const TTL: Duration = Duration::from_secs(6 * 60 * 60);
+    /// Hard cap: prune expired entries first, then drop everything (the next
+    /// request re-pins instantly, so a full reset is cheap and correct).
+    const MAX_ENTRIES: usize = 4096;
+
+    static AFFINITY: Mutex<Option<HashMap<String, (String, Instant)>>> = Mutex::new(None);
+
+    fn prune(map: &mut HashMap<String, (String, Instant)>) {
+        let now = Instant::now();
+        map.retain(|_, (_, at)| now.duration_since(*at) < TTL);
+    }
+
+    pub fn get(key: &str) -> Option<String> {
+        let mut guard = AFFINITY.lock().unwrap();
+        let map = guard.as_mut()?;
+        prune(map);
+        map.get(key).map(|(account, _)| account.clone())
+    }
+
+    pub fn set(key: &str, account_id: &str) {
+        let mut guard = AFFINITY.lock().unwrap();
+        let map = guard.get_or_insert_with(HashMap::new);
+        prune(map);
+        if map.len() >= MAX_ENTRIES {
+            map.clear();
+        }
+        map.insert(key.to_string(), (account_id.to_string(), Instant::now()));
+    }
+}
+
 /// Account selection logic.
 pub struct AccountSelector {
     strategy: RoutingStrategy,
@@ -128,7 +173,12 @@ impl AccountSelector {
     /// Only considers accounts with health_status == "healthy", "unchecked", or
     /// unset. Explicitly failed/error/timeout accounts stay out of the pool until
     /// a later health check marks them usable again.
-    async fn select_index(&self, routing_key: &str, accounts: &[Account]) -> Option<usize> {
+    async fn select_index(
+        &self,
+        routing_key: &str,
+        session_key: Option<&str>,
+        accounts: &[Account],
+    ) -> Option<usize> {
         if accounts.is_empty() {
             return None;
         }
@@ -149,6 +199,34 @@ impl AccountSelector {
             return None;
         }
 
+        // Session affinity first: one conversation stays on one account so the
+        // upstream prompt cache keeps hitting and the traffic keeps looking
+        // like one human on one machine. Falls through (and re-pins) when the
+        // pinned account is no longer a candidate — failover excluded it, it
+        // went unhealthy, or its quota ran out.
+        if let Some(session) = session_key {
+            let affinity_key = format!("{}|s:{}", routing_key, session);
+            if let Some(pinned) = session_affinity::get(&affinity_key) {
+                if let Some(&idx) = candidates.iter().find(|&&i| accounts[i].id == pinned) {
+                    return Some(idx);
+                }
+            }
+            let picked = self.pick_with_codex_serial(routing_key, accounts, &candidates).await?;
+            session_affinity::set(&affinity_key, &accounts[picked].id);
+            return Some(picked);
+        }
+
+        self.pick_with_codex_serial(routing_key, accounts, &candidates)
+            .await
+    }
+
+    /// Codex 串行 + 池策略选号。
+    async fn pick_with_codex_serial(
+        &self,
+        routing_key: &str,
+        accounts: &[Account],
+        candidates: &[usize],
+    ) -> Option<usize> {
         // Codex OAuth 串行使用：只要候选里存在 Codex 账号，就固定使用当前
         // sticky 账号（同模型），直到它因额度耗尽 / 请求失败 / 健康异常被
         // 排除出候选，才按剩余额度优先切到下一个 Codex 账号。绝不轮询。
@@ -157,10 +235,7 @@ impl AccountSelector {
             .any(|&i| accounts[i].credential_type.as_deref() == Some("codex_oauth"));
         if has_codex {
             if let Some(sticky_id) = sticky_counter::get(routing_key) {
-                if let Some(&idx) = candidates
-                    .iter()
-                    .find(|&&i| accounts[i].id == sticky_id)
-                {
+                if let Some(&idx) = candidates.iter().find(|&&i| accounts[i].id == sticky_id) {
                     return Some(idx);
                 }
             }
@@ -178,7 +253,8 @@ impl AccountSelector {
             return Some(pick);
         }
 
-        self.pick_index(routing_key, accounts, candidates).await
+        self.pick_index(routing_key, accounts, candidates.to_vec())
+            .await
     }
 
     async fn pick_index(
@@ -301,9 +377,10 @@ fn quota_exhausted(account: &Account) -> bool {
 fn codex_remaining(account: &Account) -> f64 {
     if let Some(raw) = account.quota_windows.as_deref() {
         if let Ok(windows) = serde_json::from_str::<Vec<serde_json::Value>>(raw) {
-            if let Some(primary) = windows.iter().find(|window| {
-                window.get("key").and_then(|key| key.as_str()) == Some("primary")
-            }) {
+            if let Some(primary) = windows
+                .iter()
+                .find(|window| window.get("key").and_then(|key| key.as_str()) == Some("primary"))
+            {
                 let used = primary
                     .get("used_percent")
                     .and_then(|value| value.as_f64())
@@ -452,6 +529,7 @@ pub async fn select_account(
     strategy: &RoutingStrategy,
     model: Option<&str>,
     entry_protocol: Option<&str>,
+    session_key: Option<&str>,
     state: &AppState,
 ) -> Result<(Account, Provider), String> {
     select_account_excluding(
@@ -459,6 +537,7 @@ pub async fn select_account(
         strategy,
         model,
         entry_protocol,
+        session_key,
         &std::collections::HashSet::new(),
         state,
     )
@@ -558,10 +637,9 @@ async fn attempt_health_recovery(
                 // Still unhealthy — update timestamp so we don't re-check
                 // again within the cooldown window.
                 let (status, code, msg) = match other {
-                    crate::services::health_check::HealthResult::Failed {
-                        code,
-                        body,
-                    } => ("failed", *code, body.clone()),
+                    crate::services::health_check::HealthResult::Failed { code, body } => {
+                        ("failed", *code, body.clone())
+                    }
                     crate::services::health_check::HealthResult::Timeout => {
                         ("timeout", 0u16, "Request timed out".into())
                     }
@@ -595,6 +673,7 @@ pub async fn select_account_excluding(
     strategy: &RoutingStrategy,
     model: Option<&str>,
     entry_protocol: Option<&str>,
+    session_key: Option<&str>,
     excluded_account_ids: &std::collections::HashSet<String>,
     state: &AppState,
 ) -> Result<(Account, Provider), String> {
@@ -813,7 +892,7 @@ pub async fn select_account_excluding(
         model.unwrap_or("*")
     );
     let idx = selector
-        .select_index(&routing_key, &candidates)
+        .select_index(&routing_key, session_key, &candidates)
         .await;
     let idx = match idx {
         Some(index) => index,
@@ -821,15 +900,10 @@ pub async fn select_account_excluding(
             // All candidates rejected by health gate — attempt auto-recovery:
             // re-check accounts whose last health check is older than the
             // cooldown period.  If any recover, retry selection.
-            let recovered = attempt_health_recovery(
-                &mut candidates,
-                &provider_map,
-                state,
-            )
-            .await;
+            let recovered = attempt_health_recovery(&mut candidates, &provider_map, state).await;
             if recovered {
                 selector
-                    .select_index(&routing_key, &candidates)
+                    .select_index(&routing_key, session_key, &candidates)
                     .await
                     .unwrap_or(usize::MAX) // sentinel, handled below
             } else {
@@ -1004,10 +1078,7 @@ pub async fn get_stats_response(state: &AppState) -> serde_json::Value {
     let db = &state.db;
 
     let stats = db.logs.get_stats(&db.conn).ok();
-    let analytics = db
-        .logs
-        .get_analytics(&db.conn, None, None)
-        .ok();
+    let analytics = db.logs.get_analytics(&db.conn, None, None).ok();
 
     serde_json::json!({
         "stats": stats,
@@ -1092,7 +1163,7 @@ mod tests {
         error.id = "acct_2".into();
         error.health_status = Some("error".into());
         assert!(selector
-            .select_index("default|chat|model", &[failed, error])
+            .select_index("default|chat|model", None, &[failed, error])
             .await
             .is_none());
     }
@@ -1164,20 +1235,66 @@ mod tests {
 
         let accounts = vec![a1.clone(), a2.clone()];
         // 首次：剩余额度最多的 acct-codex-1（used 10%）。
-        let i = futures::executor::block_on(selector.select_index(key, &accounts)).unwrap();
+        let i =
+            futures::executor::block_on(selector.select_index(key, None, &accounts)).unwrap();
         assert_eq!(accounts[i].id, "acct-codex-1");
         // 连续请求保持 sticky，绝不轮询。
         for _ in 0..5 {
-            let j = futures::executor::block_on(selector.select_index(key, &accounts)).unwrap();
+            let j = futures::executor::block_on(selector.select_index(key, None, &accounts))
+                .unwrap();
             assert_eq!(accounts[j].id, "acct-codex-1");
         }
         // acct-codex-1 额度耗尽离开候选（quota_exhausted 已过滤）→ 切到
         // acct-codex-2 并 sticky。
         let remaining = vec![a2.clone()];
-        let k = futures::executor::block_on(selector.select_index(key, &remaining)).unwrap();
+        let k = futures::executor::block_on(selector.select_index(key, None, &remaining)).unwrap();
         assert_eq!(remaining[k].id, "acct-codex-2");
-        let m = futures::executor::block_on(selector.select_index(key, &remaining)).unwrap();
+        let m = futures::executor::block_on(selector.select_index(key, None, &remaining)).unwrap();
         assert_eq!(remaining[m].id, "acct-codex-2");
+    }
+
+    #[test]
+    fn session_affinity_pins_one_account_per_conversation() {
+        // 同一会话固定一个账号（prompt cache 命中 + 一人一机画像），
+        // 不同会话不受影响，粘住的账号离开候选后自动换绑。
+        let selector = AccountSelector::new(RoutingStrategy::RoundRobin);
+        let mut a1 = account(None);
+        a1.id = "acct-a".into();
+        let mut a2 = account(None);
+        a2.id = "acct-b".into();
+        let accounts = vec![a1.clone(), a2.clone()];
+        let key = "affinity-test|chat|gpt-4.1";
+
+        // 首次选号（轮询选到 a），然后同会话后续请求必须粘住同一账号。
+        let first =
+            futures::executor::block_on(selector.select_index(key, Some("sess-1"), &accounts))
+                .unwrap();
+        let pinned_id = accounts[first].id.clone();
+        for _ in 0..5 {
+            let next =
+                futures::executor::block_on(selector.select_index(key, Some("sess-1"), &accounts))
+                    .unwrap();
+            assert_eq!(accounts[next].id, pinned_id, "session stays pinned");
+        }
+
+        // 另一会话有独立的粘性：轮询选号后同样固定住。
+        let other =
+            futures::executor::block_on(selector.select_index(key, Some("sess-2"), &accounts))
+                .unwrap();
+        let other_pinned = accounts[other].id.clone();
+        for _ in 0..3 {
+            let next =
+                futures::executor::block_on(selector.select_index(key, Some("sess-2"), &accounts))
+                    .unwrap();
+            assert_eq!(accounts[next].id, other_pinned, "second session pinned");
+        }
+
+        // 粘住的账号离开候选（故障转移排除）→ 换绑到剩余账号。
+        let remaining = vec![accounts[1 - first].clone()];
+        let rebind =
+            futures::executor::block_on(selector.select_index(key, Some("sess-1"), &remaining))
+                .unwrap();
+        assert_eq!(remaining[rebind].id, accounts[1 - first].id);
     }
 
     #[test]
@@ -1189,8 +1306,10 @@ mod tests {
         a2.id = "acct-chat-2".into();
         let key = "noncodex-test|chat|gpt-4.1";
         let accounts = vec![a1, a2];
-        let i = futures::executor::block_on(selector.select_index(key, &accounts)).unwrap();
-        let j = futures::executor::block_on(selector.select_index(key, &accounts)).unwrap();
+        let i =
+            futures::executor::block_on(selector.select_index(key, None, &accounts)).unwrap();
+        let j =
+            futures::executor::block_on(selector.select_index(key, None, &accounts)).unwrap();
         // 非 Codex 场景仍按池配置轮询。
         assert_ne!(accounts[i].id, accounts[j].id);
     }

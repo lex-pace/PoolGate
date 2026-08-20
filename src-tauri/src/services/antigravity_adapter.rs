@@ -52,16 +52,14 @@ pub const GOOGLE_USERINFO_URL: &str = "https://www.googleapis.com/oauth2/v2/user
 /// Loaded from the `ANTIGRAVITY_CLIENT_ID` environment variable at runtime to
 /// keep credentials out of version control. Set it (and the secret) in the
 /// environment used to launch the app.
-pub static ANTIGRAVITY_CLIENT_ID: LazyLock<String> = LazyLock::new(|| {
-    std::env::var("ANTIGRAVITY_CLIENT_ID").unwrap_or_default()
-});
+pub static ANTIGRAVITY_CLIENT_ID: LazyLock<String> =
+    LazyLock::new(|| std::env::var("ANTIGRAVITY_CLIENT_ID").unwrap_or_default());
 
 /// Antigravity OAuth client secret.
 ///
 /// Loaded from the `ANTIGRAVITY_CLIENT_SECRET` environment variable at runtime.
-pub static ANTIGRAVITY_CLIENT_SECRET: LazyLock<String> = LazyLock::new(|| {
-    std::env::var("ANTIGRAVITY_CLIENT_SECRET").unwrap_or_default()
-});
+pub static ANTIGRAVITY_CLIENT_SECRET: LazyLock<String> =
+    LazyLock::new(|| std::env::var("ANTIGRAVITY_CLIENT_SECRET").unwrap_or_default());
 
 /// OAuth scopes required for Antigravity (Cloud Code) API access.
 pub const ANTIGRAVITY_SCOPES: &str = concat!(
@@ -76,10 +74,7 @@ pub const ANTIGRAVITY_SCOPES: &str = concat!(
 pub const ANTIGRAVITY_REDIRECT_PORT: u16 = 8088;
 
 fn antigravity_redirect_uri() -> String {
-    format!(
-        "http://localhost:{}/callback",
-        ANTIGRAVITY_REDIRECT_PORT
-    )
+    format!("http://localhost:{}/callback", ANTIGRAVITY_REDIRECT_PORT)
 }
 
 // ── Upstream API configuration ──────────────────────────────────────────────
@@ -88,8 +83,7 @@ fn antigravity_redirect_uri() -> String {
 pub const ANTIGRAVITY_BASE_URL: &str = "https://cloudcode-pa.googleapis.com";
 
 /// Daily / sandbox fallback base URL.
-pub const ANTIGRAVITY_DAILY_BASE_URL: &str =
-    "https://daily-cloudcode-pa.sandbox.googleapis.com";
+pub const ANTIGRAVITY_DAILY_BASE_URL: &str = "https://daily-cloudcode-pa.sandbox.googleapis.com";
 
 /// Upstream UA fingerprint (matches the reference Antigravity client).
 pub const ANTIGRAVITY_USER_AGENT: &str = "antigravity/1.11.9 windows/amd64";
@@ -158,7 +152,8 @@ pub async fn start_antigravity_oauth() -> Result<AntigravityOAuthStartResult, St
                     .next()
                     .and_then(|line| line.split_whitespace().nth(1))
                 {
-                    let callback = format!("http://localhost:{}{}", ANTIGRAVITY_REDIRECT_PORT, path);
+                    let callback =
+                        format!("http://localhost:{}{}", ANTIGRAVITY_REDIRECT_PORT, path);
                     let _ = callback_tx.send(callback);
                 }
             }
@@ -245,7 +240,10 @@ pub async fn complete_antigravity_oauth(
 
     // Resolve the Cloud Code project id (may fall back to a generated id).
     let project_id = fetch_project_id(&access_token).await.unwrap_or_else(|e| {
-        tracing::warn!("Antigravity loadCodeAssist failed, using mock project id: {}", e);
+        tracing::warn!(
+            "Antigravity loadCodeAssist failed, using mock project id: {}",
+            e
+        );
         generate_mock_project_id()
     });
 
@@ -592,11 +590,7 @@ pub async fn check_antigravity_health(
     };
     let access_token = match payload.access_token.filter(|t| !t.trim().is_empty()) {
         Some(token) => token,
-        None => {
-            return HealthResult::Error(
-                "Antigravity account has no access token".to_string(),
-            )
-        }
+        None => return HealthResult::Error("Antigravity account has no access token".to_string()),
     };
 
     let start = Instant::now();
@@ -642,7 +636,9 @@ fn persist_antigravity_account(
         id_token: None,
         account_id: None,
         expires_at: Some(expires_at.clone()),
-        token_type: Some(token.token_type).filter(|t| !t.is_empty()).or_else(|| Some("Bearer".into())),
+        token_type: Some(token.token_type)
+            .filter(|t| !t.is_empty())
+            .or_else(|| Some("Bearer".into())),
         base_url: Some(ANTIGRAVITY_BASE_URL.into()),
         metadata: Some(metadata.clone()),
         ..CredentialPayload::default()
@@ -702,7 +698,9 @@ fn persist_antigravity_account(
         )?;
     }
 
-    let models_json = "[\"gemini-2.5-flash\",\"gemini-3-flash\",\"gemini-3-pro-low\",\"gemini-3-pro-high\"]".to_string();
+    let models_json =
+        "[\"gemini-2.5-flash\",\"gemini-3-flash\",\"gemini-3-pro-low\",\"gemini-3-pro-high\"]"
+            .to_string();
     let account = Account {
         id: format!("acct_{}", Uuid::new_v4().simple()),
         provider_id: Some(provider_id),
@@ -790,7 +788,11 @@ mod tests {
             "https://cloudcode-pa.googleapis.com/v1internal:generateContent"
         );
         assert_eq!(
-            build_v1_internal_url(ANTIGRAVITY_BASE_URL, "streamGenerateContent", Some("alt=sse")),
+            build_v1_internal_url(
+                ANTIGRAVITY_BASE_URL,
+                "streamGenerateContent",
+                Some("alt=sse")
+            ),
             "https://cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse"
         );
     }

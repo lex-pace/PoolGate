@@ -124,8 +124,20 @@ pub async fn request_context(account: &Account) -> Result<ClaudeRequestContext, 
 pub fn prepare_messages_body(body: &Value, _stream: bool) -> Value {
     let mut value = body.clone();
     if let Some(object) = value.as_object_mut() {
-        // Inject or prepend system prefix.
-        match object.get("system") {
+        // Inject or prepend system prefix. When the client is Claude Code
+        // itself the prefix is already the first system block — skip so the
+        // gateway never duplicates it.
+        let already_prefixed = object
+            .get("system")
+            .and_then(|system| system.as_array())
+            .and_then(|blocks| blocks.first())
+            .and_then(|block| block.get("text"))
+            .and_then(Value::as_str)
+            .is_some_and(|text| {
+                text.starts_with(CLAUDE_CODE_SYSTEM_PREFIX)
+            });
+        if !already_prefixed {
+            match object.get("system") {
             Some(existing) => {
                 // Existing system field: prepend the prefix.
                 let prefix_block = serde_json::json!({
@@ -175,6 +187,7 @@ pub fn prepare_messages_body(body: &Value, _stream: bool) -> Value {
                     ]),
                 );
             }
+            }
         }
 
         // Enforce max_tokens if not present (required by Anthropic API).
@@ -192,11 +205,14 @@ pub fn apply_headers(
     context: &ClaudeRequestContext,
     stream: bool,
 ) -> RequestBuilder {
-    let request = request
-        .bearer_auth(&context.access_token)
-        .header("anthropic-version", ANTHROPIC_VERSION)
-        .header("Content-Type", "application/json")
-        .header("User-Agent", "PoolGate/1.0");
+    // Present the full Claude Code fingerprint: subscription backends profile
+    // the client, and a self-identifying gateway UA is a third-party signal.
+    let request = crate::services::client_profiles::apply_claude_code_profile(
+        request
+            .bearer_auth(&context.access_token)
+            .header("anthropic-version", ANTHROPIC_VERSION)
+            .header("Content-Type", "application/json"),
+    );
 
     if stream {
         request.header("Accept", "text/event-stream")
@@ -241,7 +257,9 @@ pub async fn check_claude_health(account: &Account) -> crate::services::health_c
         Ok(Ok(resp)) => {
             let latency = start.elapsed().as_millis() as u64;
             if resp.status().is_success() {
-                HealthResult::Passed { latency_ms: latency }
+                HealthResult::Passed {
+                    latency_ms: latency,
+                }
             } else {
                 let code = resp.status().as_u16();
                 let body = resp.text().await.unwrap_or_default();
@@ -325,8 +343,8 @@ pub async fn refresh_after_unauthorized(
         ));
     }
 
-    let json: Value =
-        serde_json::from_str(&body).map_err(|error| format!("Invalid refresh response: {}", error))?;
+    let json: Value = serde_json::from_str(&body)
+        .map_err(|error| format!("Invalid refresh response: {}", error))?;
 
     let new_access_token = json["access_token"]
         .as_str()
@@ -340,8 +358,7 @@ pub async fn refresh_after_unauthorized(
         .or(payload.refresh_token.clone());
 
     let expires_in = json["expires_in"].as_i64().unwrap_or(3600);
-    let new_expires_at =
-        (Utc::now() + chrono::Duration::seconds(expires_in)).to_rfc3339();
+    let new_expires_at = (Utc::now() + chrono::Duration::seconds(expires_in)).to_rfc3339();
 
     // Persist.
     let mut new_payload = payload;
@@ -355,7 +372,10 @@ pub async fn refresh_after_unauthorized(
     updated.credential_data = Some(credential_data);
     updated.expires_at = Some(new_expires_at);
     state.db.accounts.update(&state.db.conn, &updated)?;
-    state.db.accounts.mark_token_refreshed(&state.db.conn, account_id)?;
+    state
+        .db
+        .accounts
+        .mark_token_refreshed(&state.db.conn, account_id)?;
 
     state
         .db
@@ -426,6 +446,23 @@ mod tests {
         });
         let prepared = prepare_messages_body(&body, false);
         assert_eq!(prepared["max_tokens"], 2048);
+    }
+
+    #[test]
+    fn messages_body_does_not_duplicate_prefix_from_claude_code_client() {
+        // Claude Code already sends the prefix as the first system block.
+        let body = json!({
+            "model": "claude-sonnet-4-20250514",
+            "system": [
+                {"type": "text", "text": CLAUDE_CODE_SYSTEM_PREFIX},
+                {"type": "text", "text": "Be concise."}
+            ],
+            "messages": [{"role": "user", "content": "hi"}]
+        });
+        let prepared = prepare_messages_body(&body, true);
+        let system = prepared["system"].as_array().unwrap();
+        assert_eq!(system.len(), 2, "prefix must not be injected twice");
+        assert_eq!(system[0]["text"], CLAUDE_CODE_SYSTEM_PREFIX);
     }
 
     #[test]

@@ -20,6 +20,12 @@ export const NODE_ID_PREFIX_ACCOUNT = "account-";
  *  them into a single summary node to keep the canvas readable. */
 export const ACCOUNT_COLLAPSE_THRESHOLD = 6;
 
+/** Mockup design (2026-08-02): accounts live in the provider inspector only
+ *  and never enter the canvas — the canvas stays a clean four-layer topology
+ *  (网关 → 协议 → 路由池 → 上游厂商). Flip to `true` to restore the fifth
+ *  account layer. */
+export const SHOW_ACCOUNT_LAYER = false;
+
 export function protocolNodeId(protocol: string) {
   return `${NODE_ID_PREFIX_PROTOCOL}${protocol}`;
 }
@@ -76,7 +82,7 @@ function protocolLabel(protocol: string) {
 
 function strategyLabel(strategy?: string) {
   switch (strategy) {
-    case "least_used": return "最少使用";
+    case "least_used": return "最少用";
     case "priority": return "优先级";
     case "random": return "随机";
     case "cost_optimized": return "成本优先";
@@ -84,8 +90,30 @@ function strategyLabel(strategy?: string) {
   }
 }
 
-function metric(value = 0) {
-  return Math.max(0, value).toLocaleString("zh-CN");
+function providerAccountsLine(provider: RouteTopology["providers"][number]) {
+  const accounts = `${provider.healthy_account_count}/${provider.account_count} 账号`;
+  const latency = latencyMs(provider.traffic.avg_latency_ms);
+  const success = successRate(provider.traffic.success_rate);
+  return [accounts, latency, success].filter(Boolean).join(" · ");
+}
+
+/** Compact count matching the mockup nodes: 3,842 → "3.8k". */
+function compact(value: number) {
+  const n = Math.max(0, value);
+  if (n >= 1000) {
+    const k = n / 1000;
+    return `${k >= 100 ? Math.round(k) : k.toFixed(1)}k`;
+  }
+  return String(Math.round(n));
+}
+
+/** Success-rate percent, e.g. 99.6. */
+function successRate(rate?: number) {
+  return typeof rate === "number" && Number.isFinite(rate) ? `${rate.toFixed(1)}%` : "—";
+}
+
+function latencyMs(ms?: number) {
+  return typeof ms === "number" && Number.isFinite(ms) ? `${Math.round(ms)}ms` : undefined;
 }
 
 export type EdgeDeltaMap = Map<string, number>;
@@ -156,11 +184,11 @@ export function buildTopologyGraph(input: BuildTopologyInput): {
       id: NODE_ID_GATEWAY,
       label: data.gateway.name,
       subtitle: data.gateway.address,
-      stats: `${data.gateway.active_connections} active`,
-      detail: data.gateway.running ? "RUNNING" : "STOPPED",
+      stats: `${data.gateway.active_connections} 并发`,
+      detail: data.gateway.running ? "网关运行中" : "已停止",
       health: gatewayHealth,
       enabled: data.gateway.running,
-      active: (input.liveNodes.get(NODE_ID_GATEWAY) ?? 0) > 0,
+      active: (input.liveNodes.get(NODE_ID_GATEWAY) ?? 0) > 0 || data.gateway.active_connections > 0,
       activeRequests: data.gateway.active_connections,
       selected: input.selection.kind === "node" && input.selection.id === NODE_ID_GATEWAY,
       ancestorOfSelection: false,
@@ -178,8 +206,10 @@ export function buildTopologyGraph(input: BuildTopologyInput): {
         id: protocol.id,
         label: protocol.name,
         subtitle: protocolLabel(protocol.protocol),
-        stats: `${protocol.pool_ids.length} pools`,
-        detail: `${metric(protocol.request_count)} req`,
+        stats: `${compact(protocol.traffic.total_requests)} 请求 · ${successRate(protocol.traffic.success_rate)}`,
+        detail: (input.liveNodes.get(protocol.id) ?? 0) > 0
+          ? `${input.liveNodes.get(protocol.id) ?? 0} 条活跃路径`
+          : `${protocol.pool_ids.length} 条路由路径`,
         health: protocol.enabled ? "healthy" : "disabled",
         enabled: protocol.enabled,
         active: (input.liveNodes.get(protocol.id) ?? 0) > 0,
@@ -200,9 +230,10 @@ export function buildTopologyGraph(input: BuildTopologyInput): {
         kind: "pool",
         id: pool.id,
         label: pool.name,
-        subtitle: `${protocolLabel(pool.protocol)} · ${strategyLabel(pool.strategy)}`,
-        stats: `${pool.healthy_resource_count}/${pool.resource_count} resources`,
-        detail: `${metric(pool.traffic.total_requests)} req · ${pool.model_count} models`,
+        subtitle: protocolLabel(pool.protocol),
+        badge: strategyLabel(pool.strategy),
+        stats: `${pool.healthy_resource_count}/${pool.resource_count} 资源 · ${pool.model_count} 模型`,
+        detail: `${compact(pool.traffic.total_requests)} 请求 · ${successRate(pool.traffic.success_rate)}`,
         health: healthForPool(pool),
         enabled: pool.enabled,
         active: (input.liveNodes.get(poolNodeId(pool.id)) ?? 0) > 0,
@@ -224,8 +255,8 @@ export function buildTopologyGraph(input: BuildTopologyInput): {
         id: provider.id,
         label: provider.name,
         subtitle: providerSubtitle(provider),
-        stats: `${provider.healthy_account_count}/${provider.account_count} healthy`,
-        detail: `${metric(provider.traffic.total_requests)} req · ${metric(provider.traffic.total_tokens)} tok`,
+        stats: providerAccountsLine(provider),
+        detail: `${compact(provider.traffic.total_requests)} 请求`,
         health: healthForProvider(provider),
         enabled: provider.enabled,
         active: (input.liveNodes.get(providerNodeId(provider.id)) ?? 0) > 0,
@@ -236,66 +267,66 @@ export function buildTopologyGraph(input: BuildTopologyInput): {
     });
   }
 
-  // --- Fifth layer: account nodes (collapsed per provider when too many) ---
-  const accountsByProvider = new Map<string, RouteTopology["accounts"]>();
-  for (const account of data.accounts) {
-    const list = accountsByProvider.get(account.provider_id) ?? [];
-    list.push(account);
-    accountsByProvider.set(account.provider_id, list);
-  }
-  const collapsedProviders = new Set(
-    [...accountsByProvider.entries()]
-      .filter(([, list]) => list.length > ACCOUNT_COLLAPSE_THRESHOLD)
-      .map(([providerId]) => providerId),
-  );
-  const accountById = new Map(data.accounts.map((account) => [account.id, account]));
-  for (const [providerId, list] of accountsByProvider) {
-    const provider = data.providers.find((item) => item.id === providerId);
-    const providerName = provider?.name ?? providerId;
-    if (collapsedProviders.has(providerId)) {
-      const healthy = list.filter((account) => healthForAccount(account) === "healthy").length;
-      const hasFault = list.some((account) => healthForAccount(account) === "fault");
-      nodes.push({
-        id: accountSummaryNodeId(providerId),
-        type: "topology",
-        position: { x: 0, y: 0 },
-        data: {
-          kind: "account",
-          id: accountSummaryNodeId(providerId),
-          label: `${list.length} 个账号`,
-          subtitle: providerName,
-          stats: `${healthy}/${list.length} 健康`,
-          detail: "已折叠 · 点击查看详情",
-          health: list.length === healthy ? "healthy" : hasFault ? "fault" : "warning",
-          enabled: true,
-          active: false,
-          activeRequests: 0,
-          selected: input.selection.kind === "node" && input.selection.id === accountSummaryNodeId(providerId),
-          ancestorOfSelection: false,
-        },
-      });
-      continue;
+  // --- Fifth layer: account nodes (collapsed per provider when too many).
+  // Hidden from the canvas per the mockup design (accounts live in the
+  // provider inspector); kept buildable behind SHOW_ACCOUNT_LAYER. ---
+  const collapsedProviders = new Set<string>();
+  if (SHOW_ACCOUNT_LAYER) {
+    const accountsByProvider = new Map<string, RouteTopology["accounts"]>();
+    for (const account of data.accounts) {
+      const list = accountsByProvider.get(account.provider_id) ?? [];
+      list.push(account);
+      accountsByProvider.set(account.provider_id, list);
     }
-    for (const account of list) {
-      nodes.push({
-        id: accountNodeId(account.id),
-        type: "topology",
-        position: { x: 0, y: 0 },
-        data: {
-          kind: "account",
-          id: account.id,
-          label: account.name,
-          subtitle: account.plan_type ?? account.email_masked ?? "Account",
-          stats: account.routable ? "可路由" : "待适配",
-          detail: account.status === "disabled" ? "已禁用" : account.health_status ? account.health_status : "",
-          health: healthForAccount(account),
-          enabled: account.status !== "disabled",
-          active: (input.liveNodes.get(accountNodeId(account.id)) ?? 0) > 0,
-          activeRequests: input.liveNodes.get(accountNodeId(account.id)) ?? 0,
-          selected: input.selection.kind === "node" && input.selection.id === accountNodeId(account.id),
-          ancestorOfSelection: false,
-        },
-      });
+    for (const [providerId, list] of accountsByProvider) {
+      if (list.length > ACCOUNT_COLLAPSE_THRESHOLD) collapsedProviders.add(providerId);
+      const provider = data.providers.find((item) => item.id === providerId);
+      const providerName = provider?.name ?? providerId;
+      if (collapsedProviders.has(providerId)) {
+        const healthy = list.filter((account) => healthForAccount(account) === "healthy").length;
+        const hasFault = list.some((account) => healthForAccount(account) === "fault");
+        nodes.push({
+          id: accountSummaryNodeId(providerId),
+          type: "topology",
+          position: { x: 0, y: 0 },
+          data: {
+            kind: "account",
+            id: accountSummaryNodeId(providerId),
+            label: `${list.length} 个账号`,
+            subtitle: providerName,
+            stats: `${healthy}/${list.length} 健康`,
+            detail: "已折叠 · 点击查看详情",
+            health: list.length === healthy ? "healthy" : hasFault ? "fault" : "warning",
+            enabled: true,
+            active: false,
+            activeRequests: 0,
+            selected: input.selection.kind === "node" && input.selection.id === accountSummaryNodeId(providerId),
+            ancestorOfSelection: false,
+          },
+        });
+        continue;
+      }
+      for (const account of list) {
+        nodes.push({
+          id: accountNodeId(account.id),
+          type: "topology",
+          position: { x: 0, y: 0 },
+          data: {
+            kind: "account",
+            id: account.id,
+            label: account.name,
+            subtitle: account.plan_type ?? account.email_masked ?? "Account",
+            stats: account.routable ? "可路由" : "待适配",
+            detail: account.status === "disabled" ? "已禁用" : account.health_status ? account.health_status : "",
+            health: healthForAccount(account),
+            enabled: account.status !== "disabled",
+            active: (input.liveNodes.get(accountNodeId(account.id)) ?? 0) > 0,
+            activeRequests: input.liveNodes.get(accountNodeId(account.id)) ?? 0,
+            selected: input.selection.kind === "node" && input.selection.id === accountNodeId(account.id),
+            ancestorOfSelection: false,
+          },
+        });
+      }
     }
   }
 
@@ -304,8 +335,12 @@ export function buildTopologyGraph(input: BuildTopologyInput): {
   for (const edge of data.edges) {
     if (seen.has(edge.id)) continue;
     seen.add(edge.id);
+    // Accounts never enter the canvas (mockup design): drop provider→account
+    // edges entirely unless the fifth layer is explicitly enabled.
+    if (!SHOW_ACCOUNT_LAYER && edge.target.startsWith(NODE_ID_PREFIX_ACCOUNT)) continue;
     // Collapsed providers replace their account edges with a single summary edge.
     if (
+      SHOW_ACCOUNT_LAYER &&
       edge.source.startsWith(NODE_ID_PREFIX_PROVIDER) &&
       edge.target.startsWith(NODE_ID_PREFIX_ACCOUNT) &&
       collapsedProviders.has(edge.source.slice(NODE_ID_PREFIX_PROVIDER.length))
@@ -331,6 +366,13 @@ export function buildTopologyGraph(input: BuildTopologyInput): {
     }
     const activeRequests = Math.max(edge.active_requests, input.liveEdges.get(edge.id) ?? 0);
     const status = edge.status as TopologyHealth;
+    // Arrow tint follows the edge state (mockup: gray available / blue active
+    // route / amber warning) — concrete colors because SVG marker fill
+    // attributes do not resolve CSS variables.
+    const markerColor = status === "warning" ? "#f59e0b"
+      : status === "fault" ? "#ff453a"
+      : activeRequests > 0 ? "#0a84ff"
+      : "#94a3b8";
     edges.push({
       id: edge.id,
       source: edge.source,
@@ -344,7 +386,7 @@ export function buildTopologyGraph(input: BuildTopologyInput): {
         active: activeRequests > 0,
         activeRequests,
       },
-      markerEnd: { type: MarkerType.ArrowClosed, width: 14, height: 14, color: "var(--topology-edge-arrow)" },
+      markerEnd: { type: MarkerType.ArrowClosed, width: 12, height: 12, color: markerColor },
       selectable: true,
     });
   }

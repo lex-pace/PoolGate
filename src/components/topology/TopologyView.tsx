@@ -5,6 +5,7 @@ import {
   ReactFlow,
   ReactFlowProvider,
   useReactFlow,
+  useStore,
   type NodeMouseHandler,
   type EdgeMouseHandler,
   type OnSelectionChangeParams,
@@ -65,6 +66,11 @@ type CanvasProps = {
   fitSignal: number;
 };
 
+const COLUMN_LABELS: Record<string, string> = { gateway: "网关", protocol: "协议", pool: "路由池", provider: "上游厂商" };
+const COLUMN_ORDER = ["gateway", "protocol", "pool", "provider"] as const;
+
+type ColumnHeading = { kind: string; x: number; y: number; label: string };
+
 function Canvas({
   data,
   selection,
@@ -80,6 +86,9 @@ function Canvas({
   fitSignal,
 }: CanvasProps) {
   const { fitView, setCenter, getNodes } = useReactFlow<TopologyFlowNode, TopologyFlowEdge>();
+  // Viewport transform (flow space → screen space) so the per-layer heading
+  // pills stay glued to their columns while panning/zooming.
+  const viewportTransform = useStore((state) => state.transform);
   const [layout, setLayout] = useState<{ nodes: TopologyFlowNode[]; revision: number } | null>(null);
   const layoutRevision = data.topology_revision;
   const focusHandled = useRef<string | null>(null);
@@ -156,6 +165,29 @@ function Canvas({
     });
   }, [layout, graph.nodes, data.topology_revision]);
 
+  // Column heading pills: one row at the top of the graph canvas, each pill
+  // centered over its layer's x-extent (mockup: 网关·1 / 协议·3 / …).
+  const columnHeadings = useMemo<ColumnHeading[]>(() => {
+    if (!layout || layout.revision !== data.topology_revision) return [];
+    const counts: Record<string, number> = { gateway: 1, protocol: graph.protocolCount, pool: graph.poolCount, provider: graph.providerCount };
+    const extent = new Map<string, { minX: number; maxX: number }>();
+    let top = Infinity;
+    positionedNodes.forEach((node) => {
+      const kind = node.data.kind;
+      top = Math.min(top, node.position.y);
+      if (!(kind in COLUMN_LABELS)) return;
+      const box = extent.get(kind) ?? { minX: Infinity, maxX: -Infinity };
+      box.minX = Math.min(box.minX, node.position.x);
+      box.maxX = Math.max(box.maxX, node.position.x + (node.width ?? 0));
+      extent.set(kind, box);
+    });
+    if (!Number.isFinite(top)) return [];
+    return COLUMN_ORDER.filter((kind) => extent.has(kind)).map((kind) => {
+      const box = extent.get(kind)!;
+      return { kind, x: (box.minX + box.maxX) / 2, y: top - 36, label: `${COLUMN_LABELS[kind]} · ${counts[kind]}` };
+    });
+  }, [layout, positionedNodes, graph.protocolCount, graph.poolCount, graph.providerCount, data.topology_revision]);
+
   const selectNode = useCallback((node: TopologyFlowNode) => {
     onSelect({ kind: "node", id: node.id, entityId: node.data.id, nodeKind: node.data.kind });
   }, [onSelect]);
@@ -201,6 +233,17 @@ function Canvas({
 
   return (
     <div className="pg-tv-canvas-wrap" ref={wrapperRef}>
+      <div
+        className="pg-tv-columns"
+        aria-hidden="true"
+        style={{ transform: `translate(${viewportTransform[0]}px, ${viewportTransform[1]}px) scale(${viewportTransform[2]})` }}
+      >
+        {columnHeadings.map((heading) => (
+          <span key={heading.kind} className={`pg-tv-column-label layer-${heading.kind}`} style={{ left: heading.x, top: heading.y }}>
+            {heading.label}
+          </span>
+        ))}
+      </div>
       <ReactFlow
         nodes={positionedNodes}
         edges={edgesWithFlash}
@@ -230,7 +273,7 @@ function Canvas({
         proOptions={{ hideAttribution: true }}
         className="pg-tv-flow"
       >
-        <Background variant={BackgroundVariant.Dots} gap={22} size={1.4} />
+        <Background variant={BackgroundVariant.Lines} gap={50} size={1} color="var(--grid-line)" />
       </ReactFlow>
       {search.open && (
         <div className="pg-tv-search" onPointerDown={(event) => event.stopPropagation()}>
@@ -397,7 +440,6 @@ export default function TopologyView(props: TopologyProps) {
         setSearch((value) => (value.open ? { ...value, open: false } : value));
         setSelection({ kind: "overview" });
         setShowInspector(false);
-        setFitSignal((signal) => signal + 1);
       }
     };
     window.addEventListener("keydown", handler);
@@ -408,18 +450,17 @@ export default function TopologyView(props: TopologyProps) {
     setSelection(next);
     if (next.kind !== "overview") {
       setShowInspector(true);
-      setFitSignal((signal) => signal + 1);
+      // The detail card floats above the canvas (mockup), so the canvas keeps
+      // its full width — no re-fit needed.
     }
   }, []);
 
   const handleToggleInspector = useCallback(() => {
     setShowInspector((visible) => !visible);
-    setFitSignal((signal) => signal + 1);
   }, []);
 
   const handleCloseInspector = useCallback(() => {
     setShowInspector(false);
-    setFitSignal((signal) => signal + 1);
   }, []);
 
   const handleToggleFilter = useCallback(() => {
@@ -441,7 +482,6 @@ export default function TopologyView(props: TopologyProps) {
         nodeKind: selectedResult.nodeKind,
       });
       setShowInspector(true);
-      setFitSignal((signal) => signal + 1);
       return;
     }
     const normalized = idOrQuery.trim().toLowerCase();

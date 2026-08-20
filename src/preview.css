@@ -1,4 +1,0 @@
-/* Preview-only shell overrides */
-html, body, #root { height: 100%; }
-body { font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", sans-serif; }
-:root { color-scheme: light; }

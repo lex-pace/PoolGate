@@ -239,7 +239,7 @@ impl HealthChecker {
             Ok(context) => context,
             Err(error) => return HealthResult::Error(error),
         };
-        let request = client.get(crate::services::codex_adapter::CODEX_MODELS_URL);
+        let request = client.get(crate::services::codex_adapter::codex_models_url());
         let request = crate::services::codex_adapter::apply_json_headers(request, &context);
         let start = Instant::now();
         let response =

@@ -4,9 +4,8 @@ export default function Legend() {
       <span><i className="health-healthy" />正常</span>
       <span><i className="health-warning" />告警</span>
       <span><i className="health-fault" />故障</span>
-      <span><i className="health-disabled" />禁用</span>
-      <span><i className="legend-active" />当前路由</span>
-      <span><i className="legend-selected" />当前选中</span>
+      <span className="pg-tv-legend-rule"><i className="legend-active" />当前路由路径（动态流转）</span>
+      <span className="pg-tv-legend-rule"><i className="legend-available" />可用路由关系</span>
     </div>
   );
 }

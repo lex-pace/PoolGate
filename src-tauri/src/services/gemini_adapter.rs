@@ -58,7 +58,9 @@ pub fn is_gemini_api_key(account: &Account, provider: &Provider) -> bool {
             && (provider.provider_type.eq_ignore_ascii_case("gemini")
                 || provider.provider_type.eq_ignore_ascii_case("google")
                 || provider.provider_type.eq_ignore_ascii_case("google_ai")
-                || provider.base_url.contains("generativelanguage.googleapis.com")))
+                || provider
+                    .base_url
+                    .contains("generativelanguage.googleapis.com")))
 }
 
 /// Return `true` when the account uses Google OAuth (Gemini subscription).
@@ -69,7 +71,9 @@ pub fn is_gemini_oauth(account: &Account, provider: &Provider) -> bool {
             && (provider.provider_type.eq_ignore_ascii_case("gemini")
                 || provider.provider_type.eq_ignore_ascii_case("google")
                 || provider.provider_type.eq_ignore_ascii_case("google_ai")
-                || provider.base_url.contains("generativelanguage.googleapis.com")))
+                || provider
+                    .base_url
+                    .contains("generativelanguage.googleapis.com")))
 }
 
 // ── Request context ─────────────────────────────────────────────────────────
@@ -122,10 +126,7 @@ pub fn prepare_generate_body(body: &Value, stream: bool) -> Value {
 ///
 /// Example: `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent`
 pub fn gemini_model_action_url(model: &str, action: &str) -> String {
-    format!(
-        "{}/v1beta/models/{}:{}",
-        GEMINI_BASE_URL, model, action
-    )
+    format!("{}/v1beta/models/{}:{}", GEMINI_BASE_URL, model, action)
 }
 
 // ── Header helpers ──────────────────────────────────────────────────────────
@@ -138,14 +139,15 @@ pub fn apply_headers(
     let request = if let Some(ref api_key) = context.api_key {
         request.query(&[("key", api_key.as_str())])
     } else if let Some(ref access_token) = context.access_token {
-        request.bearer_auth(access_token)
+        // OAuth (Code Assist) accounts present the official Gemini CLI client
+        // identity; the backend profiles non-official clients on this endpoint.
+        let request = request.bearer_auth(access_token);
+        crate::services::client_profiles::apply_gemini_cli_profile(request)
     } else {
         request // No auth — will fail upstream.
     };
 
-    let request = request
-        .header("Content-Type", "application/json")
-        .header("User-Agent", "PoolGate/1.0");
+    let request = request.header("Content-Type", "application/json");
 
     if stream {
         // Gemini uses `alt=sse` query parameter for streaming.
@@ -184,7 +186,9 @@ pub async fn check_gemini_health(account: &Account) -> crate::services::health_c
         Ok(Ok(resp)) => {
             let latency = start.elapsed().as_millis() as u64;
             if resp.status().is_success() {
-                HealthResult::Passed { latency_ms: latency }
+                HealthResult::Passed {
+                    latency_ms: latency,
+                }
             } else {
                 let code = resp.status().as_u16();
                 let body = resp.text().await.unwrap_or_default();
@@ -277,8 +281,8 @@ pub async fn refresh_after_unauthorized(
         ));
     }
 
-    let json: Value =
-        serde_json::from_str(&body).map_err(|error| format!("Invalid refresh response: {}", error))?;
+    let json: Value = serde_json::from_str(&body)
+        .map_err(|error| format!("Invalid refresh response: {}", error))?;
 
     let new_access_token = json["access_token"]
         .as_str()
@@ -292,8 +296,7 @@ pub async fn refresh_after_unauthorized(
         .or(payload.refresh_token.clone());
 
     let expires_in = json["expires_in"].as_i64().unwrap_or(3600);
-    let new_expires_at =
-        (chrono::Utc::now() + chrono::Duration::seconds(expires_in)).to_rfc3339();
+    let new_expires_at = (chrono::Utc::now() + chrono::Duration::seconds(expires_in)).to_rfc3339();
 
     // Persist.
     let mut new_payload = payload;
@@ -307,7 +310,10 @@ pub async fn refresh_after_unauthorized(
     updated.credential_data = Some(credential_data);
     updated.expires_at = Some(new_expires_at);
     state.db.accounts.update(&state.db.conn, &updated)?;
-    state.db.accounts.mark_token_refreshed(&state.db.conn, account_id)?;
+    state
+        .db
+        .accounts
+        .mark_token_refreshed(&state.db.conn, account_id)?;
 
     state
         .db

@@ -2,12 +2,12 @@
   "$schema": "https://raw.githubusercontent.com/nicegui/tauri-v2-schema/refs/heads/master/tauri.conf.json",
   "productName": "PoolGate",
   "version": "0.1.0",
-  "identifier": "com.poolgate.app",
+  "identifier": "com.poolgate.desktop",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1420",
-    "beforeDevCommand": "npm run dev",
-    "beforeBuildCommand": "npm run build"
+    "beforeDevCommand": "pnpm run dev",
+    "beforeBuildCommand": "pnpm run build"
   },
   "app": {
     "macOSPrivateApi": true,
@@ -19,6 +19,7 @@
         "minWidth": 900,
         "minHeight": 600,
         "resizable": true,
+        "transparent": true,
         "fullscreen": false,
         "center": true
       }
@@ -30,9 +31,6 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "macOS": {
-      "signingIdentity": "Apple Development: lxp935342295@163.com (ZZJH8P9V45)"
-    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

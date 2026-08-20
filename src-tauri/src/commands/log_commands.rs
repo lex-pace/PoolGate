@@ -19,7 +19,10 @@ pub fn get_log_stats(
     state: State<'_, Arc<AppState>>,
     range: Option<String>,
 ) -> Result<crate::db::logs::LogStats, String> {
-    state.db.logs.get_stats_range(&state.db.conn, range.as_deref())
+    state
+        .db
+        .logs
+        .get_stats_range(&state.db.conn, range.as_deref())
 }
 
 #[tauri::command]
@@ -28,11 +31,10 @@ pub fn get_analytics(
     start_date: Option<String>,
     end_date: Option<String>,
 ) -> Result<serde_json::Value, String> {
-    state.db.logs.get_analytics(
-        &state.db.conn,
-        start_date.as_deref(),
-        end_date.as_deref(),
-    )
+    state
+        .db
+        .logs
+        .get_analytics(&state.db.conn, start_date.as_deref(), end_date.as_deref())
 }
 
 // ─── Application tracing log file (new) ──────────────────────────────────────
@@ -46,10 +48,7 @@ pub fn read_app_logs(
     page_size: Option<u32>,
     keyword: Option<String>,
 ) -> Result<app_log::AppLogPage, String> {
-    let app_data_dir = state
-        .app_data_dir
-        .as_ref()
-        .ok_or("应用数据目录不可用")?;
+    let app_data_dir = state.app_data_dir.as_ref().ok_or("应用数据目录不可用")?;
     let log_dir = app_log::log_dir_for(app_data_dir);
     app_log::read_logs(
         &log_dir,
@@ -61,13 +60,8 @@ pub fn read_app_logs(
 
 /// Return metadata about the current tracing log file (path, size, line count).
 #[tauri::command]
-pub fn get_app_log_info(
-    state: State<'_, Arc<AppState>>,
-) -> Result<app_log::AppLogInfo, String> {
-    let app_data_dir = state
-        .app_data_dir
-        .as_ref()
-        .ok_or("应用数据目录不可用")?;
+pub fn get_app_log_info(state: State<'_, Arc<AppState>>) -> Result<app_log::AppLogInfo, String> {
+    let app_data_dir = state.app_data_dir.as_ref().ok_or("应用数据目录不可用")?;
     let log_dir = app_log::log_dir_for(app_data_dir);
     app_log::get_log_info(&log_dir)
 }

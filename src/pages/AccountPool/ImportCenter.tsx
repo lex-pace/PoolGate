@@ -63,6 +63,7 @@ import {
   RefreshCw,
   Search,
   ShieldCheck,
+  Sparkles,
   Star,
   Tags,
   TriangleAlert,
@@ -70,7 +71,26 @@ import {
   X,
 } from "lucide-react";
 
-/* ---------- Constants ---------- */
+/* ---------- Constants & helpers ---------- */
+
+/** Generic provider names that must NOT be used as a custom provider's identity. */
+const GENERIC_PROVIDER_NAMES = new Set([
+  "custom", "自定义", "自定义供应商", "provider", "relay", "中转", "其他", "other", "unknown",
+  "openai", "codex", "chatgpt", "anthropic", "claude", "google", "gemini", "antigravity", "xai", "grok",
+]);
+
+const isGenericProviderName = (name: string): boolean => {
+  const normalized = name.trim().toLowerCase().replace(/[\s\-_]/g, "");
+  return !normalized || GENERIC_PROVIDER_NAMES.has(normalized) || GENERIC_PROVIDER_NAMES.has(name.trim());
+};
+
+let keyEntrySeq = 0;
+const createKeyEntry = (value = "", name = "") => ({
+  id: `import-key-${keyEntrySeq++}`,
+  name,
+  value,
+  reveal: false,
+});
 
 const methodMeta: Record<AuthMethod, { label: string; icon: typeof Globe2; desc: string }> = {
   oauth: { label: "OAuth 授权", icon: Globe2, desc: "浏览器登录获取 Token" },
@@ -221,6 +241,11 @@ export function ImportCenter({ onClose }: { onClose: () => void }) {
   const [tokenContent, setTokenContent] = useState("");
   const [paths, setPaths] = useState<string[]>([]);
   const [showFormatHint, setShowFormatHint] = useState(false);
+  // Multi-key support: each entry has an optional name and a key value.
+  const [keyEntries, setKeyEntries] = useState<Array<{ id: string; name: string; value: string; reveal: boolean }>>([]);
+  // Custom provider name: required when importing a custom provider to create
+  // a distinct provider identity (avoid merging with other custom providers).
+  const [customProviderName, setCustomProviderName] = useState("");
 
   // OAuth state
   const [pendingEmail, setPendingEmail] = useState("");
@@ -266,7 +291,9 @@ export function ImportCenter({ onClose }: { onClose: () => void }) {
     ) as Partial<Record<Protocol, string>>;
     if (protocols.some((item) => !effectiveBaseUrls[item])) return null;
     const defaultBaseUrl = effectiveBaseUrls[protocol] || "";
-    const providerName = template.name;
+    // Custom providers use user-specified name; others use template name.
+    const isCustom = template.group === "custom";
+    const providerName = isCustom ? customProviderName.trim() || template.name : template.name;
     const resourceCategory = resourceCategoryForTemplate(template, method);
     const resourceTags = [
       template.group,
@@ -274,7 +301,8 @@ export function ImportCenter({ onClose }: { onClose: () => void }) {
       resourceCategoryTag(resourceCategory),
     ];
     const providerHint = {
-      id: template.id,
+      // Custom providers get a unique id derived from their name to avoid merging.
+      id: isCustom && customProviderName.trim() ? `custom_${customProviderName.trim().toLowerCase().replace(/[\s\-_]+/g, "_")}` : template.id,
       name: providerName,
       protocol,
       protocols,
@@ -288,25 +316,34 @@ export function ImportCenter({ onClose }: { onClose: () => void }) {
     };
 
     if (method === "apikey") {
-      if (!apiKey.trim()) return null;
+      // Collect all keys: from multi-key editor first, fallback to single apiKey field.
+      const allKeys = keyEntries.length > 0
+        ? keyEntries.map((e) => ({ name: e.name.trim(), value: e.value.trim() })).filter((e) => e.value.length > 0)
+        : apiKey.trim() ? [{ name: resourceName.trim(), value: apiKey.trim() }] : [];
+      if (allKeys.length === 0) return null;
       const effectiveBaseUrl = defaultBaseUrl;
       const models = customModels
         .split(",")
         .map((m) => m.trim())
         .filter(Boolean);
-      const accountName = resourceName.trim() || `${providerName} resource`;
-      const content = JSON.stringify({
-        name: accountName,
-        provider_name: providerName,
-        provider: template.id,
-        protocol,
-        base_url: effectiveBaseUrl,
-        base_urls: effectiveBaseUrls,
-        protocols,
-        api_key: apiKey.trim(),
-        models: models.length ? models : template.models,
-        tags: resourceTags,
+      // Generate one import content per key; the backend will create one account per key.
+      const contents = allKeys.map((entry, i) => {
+        const accountName = entry.name || resourceName.trim() || (allKeys.length > 1 ? `${providerName} #${i + 1}` : `${providerName} resource`);
+        return JSON.stringify({
+          name: accountName,
+          provider_name: providerName,
+          provider: providerHint.id,
+          protocol,
+          base_url: effectiveBaseUrl,
+          base_urls: effectiveBaseUrls,
+          protocols,
+          api_key: entry.value,
+          models: models.length ? models : template.models,
+          tags: resourceTags,
+        });
       });
+      // For single key, send as single content; for multiple keys, join with newlines.
+      const content = contents.join("\n");
       return { content, source_name: "model-resource.json", provider_hint: providerHint };
     }
 
@@ -333,6 +370,9 @@ export function ImportCenter({ onClose }: { onClose: () => void }) {
     selectedProtocols,
     tokenContent,
     paths,
+    keyEntries,
+    customProviderName,
+    resourceName,
   ]);
 
   const canPreview = request !== null;
@@ -367,6 +407,17 @@ export function ImportCenter({ onClose }: { onClose: () => void }) {
     if (!request) {
       setError("请先填写凭证内容或选择文件");
       return;
+    }
+    // Validate custom provider name before checking
+    if (template?.group === "custom" && method === "apikey") {
+      if (!customProviderName.trim()) {
+        setError("自定义供应商需要填写供应商名称");
+        return;
+      }
+      if (isGenericProviderName(customProviderName)) {
+        setError('自定义供应商名称不能使用 "custom"、"自定义" 等通用名，请填写独立名称（如中转站名称）');
+        return;
+      }
     }
     setError(null);
     try {
@@ -451,6 +502,17 @@ export function ImportCenter({ onClose }: { onClose: () => void }) {
 
   const handleDirectImport = async () => {
     if (!request) return;
+    // Validate custom provider name
+    if (template?.group === "custom" && method === "apikey") {
+      if (!customProviderName.trim()) {
+        setError("自定义供应商需要填写供应商名称");
+        return;
+      }
+      if (isGenericProviderName(customProviderName)) {
+        setError('自定义供应商名称不能使用通用名，请填写独立名称');
+        return;
+      }
+    }
     setError(null);
     try {
       const result = await executeImport.mutateAsync({
@@ -619,6 +681,8 @@ export function ImportCenter({ onClose }: { onClose: () => void }) {
     setOauthLoginId("");
     setOauthAuthorizationUrl("");
     setShowFormatHint(false);
+    setKeyEntries([]);
+    setCustomProviderName("");
   };
 
   // Filtered templates based on search; grouped by `group` for display.
@@ -630,8 +694,7 @@ export function ImportCenter({ onClose }: { onClose: () => void }) {
     );
   }, [providerSearch]);
 
-  // Templates flattened into a single continuous list, ordered by group —
-  // cc-switch renders one flat grid with no section dividers.
+  // Templates flattened into a single continuous list, ordered by group.
   const orderedTemplates = useMemo(() => {
     const rank = new Map(providerGroupOrder.map((g, i) => [g, i] as const));
     return [...filteredTemplates].sort(
@@ -639,391 +702,457 @@ export function ImportCenter({ onClose }: { onClose: () => void }) {
     );
   }, [filteredTemplates]);
 
+  // Group templates by provider group for sectioned display.
+  const groupedTemplates = useMemo(() => {
+    const groups: Array<{ group: ProviderGroup; label: string; items: typeof orderedTemplates }> = [];
+    const map = new Map<ProviderGroup, typeof orderedTemplates>();
+    for (const item of orderedTemplates) {
+      const existing = map.get(item.group) || [];
+      existing.push(item);
+      map.set(item.group, existing);
+    }
+    for (const group of providerGroupOrder) {
+      const items = map.get(group);
+      if (items && items.length > 0) {
+        groups.push({ group, label: providerGroupLabels[group] || group, items });
+      }
+    }
+    return groups;
+  }, [orderedTemplates]);
+
   return (
     <div className="flex flex-col h-full min-h-0">
-      {/* ─── Entry mode tabs ─── */}
-      <div className="shrink-0 flex items-center gap-1 px-5 pt-2.5" style={{ background: "var(--bg-elevated)" }}>
-        {(
-          [
-            { value: "provider", label: "模板导入", icon: Plus },
-            { value: "scan", label: "扫描本机配置", icon: Radar },
-          ] as const
-        ).map((tab) => {
-          const Icon = tab.icon;
-          const active = mode === tab.value;
-          return (
-            <button
-              key={tab.value}
-              onClick={() => {
-                setMode(tab.value);
-                setCheckResult(null);
-                previewAndCheckImport.reset();
-                if (tab.value === "scan") setSelectedTemplateId("");
-              }}
-              className={`flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[11px] font-medium transition-all cursor-pointer ${
-                active
-                  ? "bg-[var(--color-brand)] text-white"
-                  : "text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]"
-              }`}
-            >
-              <Icon size={11} />
-              {tab.label}
-            </button>
-          );
-        })}
-      </div>
-
-      {/* ─── Step indicator ─── */}
-      {mode === "provider" && (
-        <div className="shrink-0 flex items-center gap-2 px-5 py-2.5 border-b" style={{ borderColor: "var(--border-subtle)", background: "var(--bg-elevated)" }}>
-          <StepDot active n={1} label="选择厂商" />
-          <StepLine />
-          <StepDot active={!!template} n={2} label="填写凭证" />
-          <StepLine />
-          <StepDot active={!!checkResult} n={3} label="检测确认" />
-        </div>
-      )}
-
-      {/* ─── Scan view: auto-discover Codex / Cockpit config files ─── */}
-      {mode === "scan" ? (
-        <ScanConfigView
-          discovered={discovered}
-          selectedFingerprints={selectedScanFingerprints}
-          selectedModelKeys={selectedScanModelKeys}
-          existingFingerprints={existingFingerprints}
-          pending={scanConfigs.isPending}
-          onToggleAccount={toggleScanAccount}
-          onToggleModelResource={toggleScanModelResource}
-          onScan={handleScan}
-          onClear={() => {
-            setDiscovered(null);
-            setSelectedScanFingerprints(new Set());
-            setSelectedScanModelKeys(new Set());
-            previewAndCheckImport.reset();
-          }}
-        />
-      ) : (
-        <>
-          {/* ─── Step 1: Provider picker — cc-switch style flat grid ─── */}
-          {!template ? (
+      {/* ═══════════════════════════════════════════════════════════════════
+          MAIN VIEW: Provider Selection Grid
+          Shows when no template is selected and not in scan mode
+          ═══════════════════════════════════════════════════════════════════ */}
+      {!template && mode === "provider" ? (
         <div className="flex-1 flex flex-col min-h-0">
-          {/* Sticky header: title + search + count */}
-          <div className="shrink-0 flex items-center gap-3 px-5 pt-4 pb-3" style={{ background: "var(--bg-elevated)", borderBottom: "1px solid var(--border-subtle)" }}>
-            <span className="text-[13px] font-semibold text-[var(--text-primary)] shrink-0">预设供应商</span>
-            <div className="relative flex-1 max-w-[280px] ml-auto">
+          {/* ─── Header with quick actions ─── */}
+          <div className="shrink-0 px-5 pt-4 pb-3 border-b" style={{ background: "var(--bg-elevated)", borderColor: "var(--border-subtle)" }}>
+            <div className="flex items-center justify-between mb-3">
+              <div>
+                <h2 className="text-[15px] font-semibold text-[var(--text-primary)]">选择供应商</h2>
+                <p className="text-[11px] text-[var(--text-dim)] mt-0.5">从预设供应商中选择，或使用快捷操作</p>
+              </div>
+              <div className="flex items-center gap-2">
+                {/* Scan button */}
+                <button
+                  onClick={() => { setMode("scan"); setCheckResult(null); previewAndCheckImport.reset(); }}
+                  className="flex items-center gap-1.5 h-8 px-3 rounded-lg border text-[12px] font-medium transition-all cursor-pointer hover:bg-emerald-500/10 hover:border-emerald-500/30 hover:text-emerald-500"
+                  style={{ borderColor: "var(--border-default)", color: "var(--text-secondary)" }}
+                >
+                  <Radar size={14} />
+                  扫描本机配置
+                </button>
+                {/* Manual button */}
+                <button
+                  onClick={() => { setSelectedTemplateId("custom"); resetFormFields(); }}
+                  className="flex items-center gap-1.5 h-8 px-3 rounded-lg border text-[12px] font-medium transition-all cursor-pointer hover:bg-blue-500/10 hover:border-blue-500/30 hover:text-blue-500"
+                  style={{ borderColor: "var(--border-default)", color: "var(--text-secondary)" }}
+                >
+                  <Plus size={14} />
+                  手动配置
+                </button>
+              </div>
+            </div>
+            {/* Search */}
+            <div className="relative">
               <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-dim)]" />
               <input
                 value={providerSearch}
                 onChange={(e) => setProviderSearch(e.target.value)}
-                placeholder="搜索供应商..."
+                placeholder="搜索供应商名称..."
                 className="w-full h-9 rounded-lg pl-9 pr-3 text-[13px] outline-none border bg-[var(--bg-surface)] text-[var(--text-primary)] placeholder:text-[var(--text-dim)] focus:ring-2 focus:ring-[var(--color-brand)]/25 focus:border-[var(--color-brand)] transition-all"
                 style={{ borderColor: "var(--border-default)" }}
               />
             </div>
-            <span className="text-[11px] text-[var(--text-dim)] shrink-0 pg-mono">{filteredTemplates.length}</span>
           </div>
 
-          {/* Scrollable flat provider grid — cc-switch style pills.
-              Min-width based on the longest provider name (≈ "Baidu Qianfan Coding Plan"),
-              so each row packs as many tiles as the viewport allows while every name
-              stays fully visible. */}
+          {/* ─── Scrollable provider grid ─── */}
           <div className="flex-1 overflow-y-auto px-5 py-4">
-            <div className="grid gap-2" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(232px, 1fr))" }}>
-              {orderedTemplates.map((item) => {
-                const brand = getProviderBrand(item.id, item.name);
-                const isCustom = item.group === "custom";
-                return (
-                  <button
-                    key={item.id}
-                    onClick={() => {
-                      setSelectedTemplateId(item.id);
-                      resetFormFields();
-                    }}
-                    title={`${item.name} · ${item.description}`}
-                    className={`group relative flex items-center gap-2 rounded-[10px] border pl-2 pr-6 py-2 text-left transition-all cursor-pointer ${
-                      isCustom
-                        ? "text-white shadow-sm"
-                        : "hover:border-[var(--border-strong)] hover:bg-[var(--bg-elevated)] hover:shadow-[var(--shadow-card)]"
-                    }`}
-                    style={
-                      isCustom
-                        ? { background: "var(--color-brand)", borderColor: "var(--color-brand)" }
-                        : { borderColor: "var(--border-subtle)", background: "var(--bg-surface)" }
-                    }
-                  >
-                    {/* Brand icon tile */}
-                    <span
-                      className="shrink-0 w-7 h-7 rounded-lg grid place-items-center text-[11px] font-bold leading-none tracking-tight shadow-sm"
-                      style={
-                        isCustom
-                          ? { background: "rgba(255,255,255,0.22)", color: "#fff" }
-                          : { background: brand.color, color: brand.fg || "#fff" }
-                      }
-                    >
-                      {isCustom ? <Plus size={15} /> : brand.mono}
-                    </span>
-                    {/* Name */}
-                    <span
-                      className={`min-w-0 flex-1 text-[13px] font-medium whitespace-nowrap ${
-                        isCustom ? "text-white" : "text-[var(--text-primary)]"
-                      }`}
-                    >
-                      {item.name}
-                    </span>
-                    {/* Corner marker — heart for recommended, star for others */}
-                    {!isCustom &&
-                      (item.recommended ? (
-                        <Heart
-                          size={12}
-                          className="absolute top-1.5 right-1.5 text-[var(--color-warn)] fill-[var(--color-warn)]"
-                        />
-                      ) : (
-                        <Star
-                          size={11}
-                          className="absolute top-1.5 right-1.5 text-[var(--color-warn)] fill-[var(--color-warn)]"
-                        />
-                      ))}
-                  </button>
-                );
-              })}
-            </div>
-            {filteredTemplates.length === 0 && (
+            {filteredTemplates.length === 0 ? (
               <div className="text-center py-12 text-[13px] text-[var(--text-dim)]">
                 <Search size={22} className="mx-auto mb-2 opacity-30" />
                 未找到匹配的供应商
               </div>
+            ) : (
+              <div className="space-y-5">
+                {groupedTemplates.map((section) => (
+                  <div key={section.group}>
+                    <div className="flex items-center gap-2.5 mb-2.5">
+                      <span className="text-[11px] font-semibold text-[var(--text-dim)] tracking-wide uppercase">
+                        {section.label}
+                      </span>
+                      <span className="text-[10px] text-[var(--text-dim)] pg-mono">{section.items.length}</span>
+                      <div className="flex-1 h-px bg-[var(--border-subtle)]" />
+                    </div>
+                    <div className="grid gap-2" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(232px, 1fr))" }}>
+                      {section.items.map((item) => {
+                        const brand = getProviderBrand(item.id, item.name);
+                        const isCustom = item.group === "custom";
+                        return (
+                          <button
+                            key={item.id}
+                            onClick={() => {
+                              setSelectedTemplateId(item.id);
+                              resetFormFields();
+                            }}
+                            title={`${item.name} · ${item.description}`}
+                            className={`group relative flex items-center gap-2 rounded-[10px] border pl-2 pr-6 py-2 text-left transition-all cursor-pointer ${
+                              isCustom
+                                ? "text-white shadow-sm"
+                                : "hover:border-[var(--border-strong)] hover:bg-[var(--bg-elevated)] hover:shadow-[var(--shadow-card)]"
+                            }`}
+                            style={
+                              isCustom
+                                ? { background: "var(--color-brand)", borderColor: "var(--color-brand)" }
+                                : { borderColor: "var(--border-subtle)", background: "var(--bg-surface)" }
+                            }
+                          >
+                            <span
+                              className="shrink-0 w-7 h-7 rounded-lg grid place-items-center text-[11px] font-bold leading-none tracking-tight shadow-sm"
+                              style={
+                                isCustom
+                                  ? { background: "rgba(255,255,255,0.22)", color: "#fff" }
+                                  : { background: brand.color, color: brand.fg || "#fff" }
+                              }
+                            >
+                              {isCustom ? <Plus size={15} /> : brand.mono}
+                            </span>
+                            <span
+                              className={`min-w-0 flex-1 text-[13px] font-medium whitespace-nowrap ${
+                                isCustom ? "text-white" : "text-[var(--text-primary)]"
+                              }`}
+                            >
+                              {item.name}
+                            </span>
+                            {!isCustom &&
+                              (item.recommended ? (
+                                <Heart
+                                  size={12}
+                                  className="absolute top-1.5 right-1.5 text-[var(--color-warn)] fill-[var(--color-warn)]"
+                                />
+                              ) : (
+                                <Star
+                                  size={11}
+                                  className="absolute top-1.5 right-1.5 text-[var(--color-warn)] fill-[var(--color-warn)]"
+                                />
+                              ))}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
+              </div>
             )}
-            {/* Footer hint */}
             <div className="mt-5 flex items-center gap-1.5 text-[11px] text-[var(--text-dim)]">
               <Lightbulb size={12} className="text-[var(--color-warn)]" />
               自定义配置需手动填写所有必要字段
             </div>
           </div>
         </div>
-      ) : (
+      ) : mode === "scan" ? (
+        /* ═══════════════════════════════════════════════════════════════════
+            SCAN MODE: Auto-discover configs
+            ═══════════════════════════════════════════════════════════════════ */
         <>
-          {/* ─── Step 2: Configuration form ─── */}
-          <div className="shrink-0 px-5 py-3 border-b" style={{ borderColor: "var(--border-subtle)", background: "var(--bg-elevated)" }}>
-            <div className="flex items-center gap-2.5 flex-wrap">
+          {/* Back button for scan mode */}
+          <div className="shrink-0 px-5 py-2.5 border-b" style={{ background: "var(--bg-elevated)", borderColor: "var(--border-subtle)" }}>
+            <button
+              onClick={() => { setMode("provider"); setDiscovered(null); setSelectedScanFingerprints(new Set()); setSelectedScanModelKeys(new Set()); }}
+              className="flex items-center gap-1.5 text-[12px] text-[var(--text-dim)] hover:text-[var(--color-brand)] transition-colors cursor-pointer"
+            >
+              <ChevronDown size={14} className="rotate-90" /> 返回供应商选择
+            </button>
+          </div>
+          <ScanConfigView
+            discovered={discovered}
+            selectedFingerprints={selectedScanFingerprints}
+            selectedModelKeys={selectedScanModelKeys}
+            existingFingerprints={existingFingerprints}
+            pending={scanConfigs.isPending}
+            onToggleAccount={toggleScanAccount}
+            onToggleModelResource={toggleScanModelResource}
+            onScan={handleScan}
+            onClear={() => {
+              setDiscovered(null);
+              setSelectedScanFingerprints(new Set());
+              setSelectedScanModelKeys(new Set());
+              previewAndCheckImport.reset();
+            }}
+          />
+        </>
+      ) : template ? (
+        /* ═══════════════════════════════════════════════════════════════════
+            CREDENTIAL FORM: Step 2 - Fill in credentials
+            Shows when a template is selected
+            ═══════════════════════════════════════════════════════════════════ */
+        <>
+          {/* ─── Compact Header: Back + Vendor + Progress + Methods ─── */}
+          <div className="shrink-0 border-b" style={{ borderColor: "var(--border-subtle)", background: "var(--bg-elevated)" }}>
+            {/* Top row */}
+            <div className="flex items-center gap-3 px-5 py-3">
+              {/* Back button */}
               <button
                 onClick={() => { setSelectedTemplateId(""); resetFormFields(); }}
-                className="text-[11px] text-[var(--text-dim)] hover:text-[var(--color-brand)] transition-colors flex items-center gap-1 cursor-pointer"
-                title="返回厂商选择"
+                className="flex items-center justify-center w-8 h-8 rounded-lg border transition-all cursor-pointer hover:bg-[var(--bg-hover)] hover:border-[var(--border-strong)]"
+                style={{ borderColor: "var(--border-default)", color: "var(--text-secondary)" }}
+                title="返回供应商选择"
               >
-                <ChevronDown size={12} className="rotate-90" /> 返回
+                <ChevronDown size={16} className="rotate-90" />
               </button>
-              {(() => {
-                const brand = getProviderBrand(template.id, template.name);
-                return (
-                  <span
-                    className="shrink-0 w-6 h-6 rounded-md grid place-items-center text-[10px] font-bold leading-none"
-                    style={{ background: brand.color, color: brand.fg || "#fff" }}
-                  >
-                    {brand.mono}
-                  </span>
-                );
-              })()}
-              <span className="text-[14px] font-semibold tracking-[-0.01em] text-[var(--text-primary)]">{template.name}</span>
-              <Badge variant={template.group === "custom" ? "mute" : "brand"}>
-                {providerGroupLabels[template.group]}
-              </Badge>
-              <Badge variant="mute">
-                {modelResourceCategoryLabels[resourceCategoryForTemplate(template, method)]}
-              </Badge>
-              {template.recommended && <Badge variant="ok" dot>推荐</Badge>}
-              {template.codingPlan && <Badge variant="warn" dot>Coding Plan</Badge>}
+
+              {/* Vendor info */}
+              <div className="flex items-center gap-3 flex-1 min-w-0">
+                {(() => {
+                  const brand = getProviderBrand(template.id, template.name);
+                  return (
+                    <span
+                      className="shrink-0 w-9 h-9 rounded-lg grid place-items-center text-[12px] font-bold leading-none shadow-sm"
+                      style={{ background: brand.color, color: brand.fg || "#fff" }}
+                    >
+                      {brand.mono}
+                    </span>
+                  );
+                })()}
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <span className="text-[15px] font-semibold tracking-[-0.01em] text-[var(--text-primary)] truncate">
+                      {template.name}
+                    </span>
+                    <Badge variant={template.group === "custom" ? "mute" : "brand"} className="text-[10px]">
+                      {providerGroupLabels[template.group]}
+                    </Badge>
+                    {template.recommended && <Badge variant="ok" className="text-[10px]">推荐</Badge>}
+                    {template.codingPlan && <Badge variant="warn" className="text-[10px]">Coding Plan</Badge>}
+                  </div>
+                  <div className="text-[11px] text-[var(--text-dim)] flex items-center gap-1.5 mt-0.5 truncate">
+                    <span className="pg-mono truncate">
+                      {selectedProtocols.length > 0
+                        ? selectedProtocols.map(protocolLabel).join(" · ")
+                        : protocolsLabel(template) || "选择 API 格式"}
+                    </span>
+                    {template.models.length > 0 && (
+                      <>
+                        <span className="text-[var(--border-default)]">·</span>
+                        <span>{template.models.length} 个模型</span>
+                      </>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* Compact step indicator */}
+              <div className="flex items-center gap-1 shrink-0">
+                {([
+                  { n: 2, label: "填写凭证", active: !checkResult },
+                  { n: 3, label: "检测确认", active: !!checkResult },
+                ] as const).map((step, i) => (
+                  <div key={step.n} className="flex items-center gap-1">
+                    <div className={`flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-medium transition-colors ${
+                      step.active
+                        ? "bg-[var(--color-brand)]/10 text-[var(--color-brand)]"
+                        : "text-[var(--text-dim)]"
+                    }`}>
+                      <span className={`w-4 h-4 rounded-full flex items-center justify-center text-[9px] font-bold ${
+                        step.active
+                          ? "bg-[var(--color-brand)] text-white"
+                          : "bg-[var(--bg-hover)]"
+                      }`}>
+                        {step.n}
+                      </span>
+                    </div>
+                    {i < 1 && <div className="w-3 h-px bg-[var(--border-subtle)]" />}
+                  </div>
+                ))}
+              </div>
             </div>
-            <div className="mt-1 text-[10px] text-[var(--text-dim)] flex items-center gap-1.5 flex-wrap">
-              <span className="pg-mono">
-                {selectedProtocols.length > 0
-                  ? selectedProtocols.map(protocolLabel).join(" · ")
-                  : protocolsLabel(template) || "选择 API 格式"}
+
+            {/* Method selector row */}
+            <div className="flex items-center gap-1.5 px-5 pb-2.5">
+              {template.authMethods.map((m) => {
+                const meta = methodMeta[m];
+                const Icon = meta.icon;
+                const active = method === m;
+                return (
+                  <button
+                    key={m}
+                    onClick={() => setMethod(m)}
+                    title={meta.desc}
+                    className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[12px] font-medium transition-all cursor-pointer ${
+                      active
+                        ? "bg-[var(--color-brand)] text-white shadow-sm shadow-[var(--color-brand)]/20"
+                        : "text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]"
+                    }`}
+                  >
+                    <Icon size={13} />
+                    {meta.label}
+                  </button>
+                );
+              })}
+              <div className="flex-1" />
+              <span className="text-[10px] text-[var(--text-dim)] pg-mono">
+                {modelResourceCategoryLabels[resourceCategoryForTemplate(template, method)]}
               </span>
-              <span>·</span>
-              <span className="pg-mono truncate">
-                {selectedProtocols.length > 0
-                  ? `${selectedProtocols.length} 个协议地址`
-                  : "自定义 Base URL"}
-              </span>
-              {template.models.length > 0 && (
-                <>
-                  <span>·</span>
-                  <span>{template.models.length} 个模型</span>
-                </>
+            </div>
+          </div>
+
+          {/* ─── Form content: single column layout ─── */}
+          <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
+            {/* Form area */}
+            <div className="flex-1 overflow-y-auto px-6 py-5 relative min-w-0 max-w-3xl mx-auto w-full">
+              {/* Loading bar */}
+              {(previewAndCheckImport.isPending || executeImport.isPending) && (
+                <div className="absolute inset-x-0 top-0 h-0.5 bg-[var(--color-brand)] opacity-80 animate-pulse" />
+              )}
+
+              {/* Adapter warning */}
+              {template.codingPlan && (
+                <div
+                  className="mb-5 rounded-xl border px-5 py-4 text-[13px] leading-6 flex items-start gap-3"
+                  style={{
+                    borderColor: "var(--color-warn)",
+                    background: "color-mix(in srgb, var(--color-warn) 6%, transparent)",
+                    color: "var(--text-secondary)",
+                  }}
+                >
+                  <TriangleAlert size={16} className="mt-0.5 shrink-0 text-[var(--color-warn)]" />
+                  <span>
+                    {template.oauth
+                      ? `${template.name} 已支持浏览器 OAuth；授权后会安全保存账号并可查询额度。`
+                      : `${template.name} 提供 Coding Plan 接入，可使用 Token & JSON 保存凭证。`}
+                  </span>
+                </div>
+              )}
+
+              {/* Method-specific forms */}
+              {method === "oauth" && template && (
+                <OauthForm
+                  template={template}
+                  email={pendingEmail}
+                  setEmail={setPendingEmail}
+                  note={pendingNote}
+                  setNote={setPendingNote}
+                  callbackUrl={callbackUrl}
+                  setCallbackUrl={setCallbackUrl}
+                  loginId={oauthLoginId}
+                  authorizationUrl={oauthAuthorizationUrl}
+                  supported={!!template.oauth}
+                  pending={startOAuth.isPending || completeOAuth.isPending}
+                  onStart={handleStartOAuth}
+                  onComplete={handleCompleteOAuth}
+                  onCancel={handleCancelOAuth}
+                  onCopy={() => copyLink(oauthAuthorizationUrl)}
+                />
+              )}
+
+              {method === "token" && (
+                <TokenForm
+                  content={tokenContent}
+                  setContent={setTokenContent}
+                  showHint={showFormatHint}
+                  setShowHint={setShowFormatHint}
+                />
+              )}
+
+              {method === "apikey" && template && (
+                <ApiKeyForm
+                  template={template}
+                  apiKey={apiKey}
+                  setApiKey={setApiKey}
+                  resourceName={resourceName}
+                  setResourceName={setResourceName}
+                  baseUrls={baseUrls}
+                  setBaseUrls={setBaseUrls}
+                  customModels={customModels}
+                  setCustomModels={setCustomModels}
+                  selectedProtocols={selectedProtocols}
+                  setSelectedProtocols={setSelectedProtocols}
+                  keyEntries={keyEntries}
+                  setKeyEntries={setKeyEntries}
+                  customProviderName={customProviderName}
+                  setCustomProviderName={setCustomProviderName}
+                />
+              )}
+
+              {method === "batch" && (
+                <BatchForm
+                  paths={paths}
+                  onPick={chooseFiles}
+                  onClear={() => {
+                    setPaths([]);
+                    previewAndCheckImport.reset();
+                  }}
+                />
+              )}
+
+              {/* Error message */}
+              {error && (
+                <div
+                  className="mt-5 rounded-xl border px-5 py-4 text-[13px] leading-6 flex items-start gap-3"
+                  style={{
+                    borderColor: "var(--color-err)",
+                    background: "color-mix(in srgb, var(--color-err) 6%, transparent)",
+                    color: "var(--color-err)",
+                  }}
+                >
+                  <TriangleAlert size={16} className="mt-0.5 shrink-0" />
+                  <span>{error}</span>
+                </div>
+              )}
+
+              {/* Loading indicator */}
+              {previewAndCheckImport.isPending && (
+                <div className="mt-5 flex items-center gap-2.5 text-[13px] text-[var(--text-dim)]">
+                  <Spinner size={15} />
+                  <span>解析中...</span>
+                </div>
               )}
             </div>
-          </div>
 
-          {/* Method selector — segmented control */}
-          <div className="shrink-0 px-5 py-2 flex items-center gap-1 border-b" style={{ borderColor: "var(--border-subtle)", background: "var(--bg-elevated)" }}>
-            {template.authMethods.map((m) => {
-              const meta = methodMeta[m];
-              const Icon = meta.icon;
-              const active = method === m;
-              return (
-                <button
-                  key={m}
-                  onClick={() => setMethod(m)}
-                  title={meta.desc}
-                  className={`flex items-center gap-1.5 rounded-md px-2 py-1 text-[11px] font-medium transition-all cursor-pointer ${
-                    active
-                      ? "bg-[var(--color-brand)] text-white"
-                      : "text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]"
-                  }`}
-                >
-                  <Icon size={11} />
-                  {meta.label}
-                </button>
-              );
-            })}
-          </div>
-
-          {/* Form area — scrollable */}
-          <div className="flex-1 overflow-y-auto px-5 py-4 relative">
-            {/* Loading bar */}
-            {(previewAndCheckImport.isPending || executeImport.isPending) && (
-              <div className="absolute inset-x-0 top-0 h-0.5 bg-[var(--color-brand)] opacity-80 animate-pulse" />
-            )}
-
-            {/* Adapter warning */}
-            {template.codingPlan && (
+            {/* Check result panel - slides up when available */}
+            {checkResult && !previewAndCheckImport.isPending && (
               <div
-                className="mb-3 rounded-md border px-3 py-2 text-[11px] leading-5 flex items-start gap-2"
-                style={{
-                  borderColor: "var(--color-warn)",
-                  background: "color-mix(in srgb, var(--color-warn) 8%, transparent)",
-                  color: "var(--text-secondary)",
-                }}
+                className="shrink-0 border-t max-h-[40vh] overflow-y-auto animate-slide-up"
+                style={{ borderColor: "var(--border-subtle)", background: "var(--bg-elevated)" }}
               >
-                <TriangleAlert size={13} className="mt-0.5 shrink-0 text-[var(--color-warn)]" />
-                <span>
-                  {template.oauth
-                    ? `${template.name} 已支持浏览器 OAuth；授权后会安全保存账号并可查询额度。`
-                    : `${template.name} 提供 Coding Plan 接入，可使用 Token & JSON 保存凭证。`}
-                </span>
-              </div>
-            )}
-
-            {/* Method-specific forms */}
-            {method === "oauth" && template && (
-              <OauthForm
-                template={template}
-                email={pendingEmail}
-                setEmail={setPendingEmail}
-                note={pendingNote}
-                setNote={setPendingNote}
-                callbackUrl={callbackUrl}
-                setCallbackUrl={setCallbackUrl}
-                loginId={oauthLoginId}
-                authorizationUrl={oauthAuthorizationUrl}
-                supported={!!template.oauth}
-                pending={startOAuth.isPending || completeOAuth.isPending}
-                onStart={handleStartOAuth}
-                onComplete={handleCompleteOAuth}
-                onCancel={handleCancelOAuth}
-                onCopy={() => copyLink(oauthAuthorizationUrl)}
-              />
-            )}
-
-            {method === "token" && (
-              <TokenForm
-                content={tokenContent}
-                setContent={setTokenContent}
-                showHint={showFormatHint}
-                setShowHint={setShowFormatHint}
-              />
-            )}
-
-            {method === "apikey" && template && (
-              <ApiKeyForm
-                template={template}
-                apiKey={apiKey}
-                setApiKey={setApiKey}
-                resourceName={resourceName}
-                setResourceName={setResourceName}
-                baseUrls={baseUrls}
-                setBaseUrls={setBaseUrls}
-                customModels={customModels}
-                setCustomModels={setCustomModels}
-                selectedProtocols={selectedProtocols}
-                setSelectedProtocols={setSelectedProtocols}
-              />
-            )}
-
-            {method === "batch" && (
-              <BatchForm
-                paths={paths}
-                onPick={chooseFiles}
-                onClear={() => {
-                  setPaths([]);
-                  previewAndCheckImport.reset();
-                }}
-              />
-            )}
-
-            {/* Inline error message */}
-            {error && (
-              <div
-                className="mt-3 rounded-md border px-3 py-2 text-[11px] leading-5 flex items-start gap-2"
-                style={{
-                  borderColor: "var(--color-err)",
-                  background: "color-mix(in srgb, var(--color-err) 8%, transparent)",
-                  color: "var(--color-err)",
-                }}
-              >
-                <TriangleAlert size={13} className="mt-0.5 shrink-0" />
-                <span>{error}</span>
-              </div>
-            )}
-
-            {/* Loading indicator */}
-            {previewAndCheckImport.isPending && (
-              <div className="mt-3 flex items-center gap-2 text-[11px] text-[var(--text-dim)]">
-                <Spinner size={13} />
-                <span>解析中...</span>
+                <CheckResultPanel
+                  result={checkResult}
+                  selected={selectedFingerprints}
+                  onToggle={toggleFingerprint}
+                  onSelectAll={() => setSelectedFingerprints(new Set(checkResult.accounts.map((a) => a.fingerprint)))}
+                  onSelectHealthy={() =>
+                    setSelectedFingerprints(
+                      new Set(
+                        checkResult.accounts
+                          .filter((a) => a.health_status === "healthy")
+                          .map((a) => a.fingerprint),
+                      ),
+                    )
+                  }
+                  onClearSelection={() => setSelectedFingerprints(new Set())}
+                />
               </div>
             )}
           </div>
-
-          {/* Check results — separated panel */}
-          {checkResult && !previewAndCheckImport.isPending && (
-            <div className="shrink-0 border-t flex flex-col min-h-0" style={{ borderColor: "var(--border-subtle)", background: "var(--bg-elevated)", maxHeight: "50%" }}>
-              <CheckResultPanel
-                result={checkResult}
-                selected={selectedFingerprints}
-                onToggle={toggleFingerprint}
-                onSelectAll={() => setSelectedFingerprints(new Set(checkResult.accounts.map((a) => a.fingerprint)))}
-                onSelectHealthy={() =>
-                  setSelectedFingerprints(
-                    new Set(
-                      checkResult.accounts
-                        .filter((a) => a.health_status === "healthy")
-                        .map((a) => a.fingerprint),
-                    ),
-                  )
-                }
-                onClearSelection={() => setSelectedFingerprints(new Set())}
-              />
-            </div>
-          )}
         </>
-      )}
-        </>
-      )}
+      ) : null}
 
       {/* ─── Footer ─── */}
       <div
-        className="shrink-0 px-5 py-3 border-t flex items-center justify-between gap-3 flex-wrap"
+        className="shrink-0 px-5 py-2.5 border-t flex items-center justify-between gap-3"
         style={{ borderColor: "var(--border-subtle)", background: "var(--bg-elevated)" }}
       >
-        <div className="flex items-center gap-4">
-          <label className="flex items-center gap-2 text-[11px] text-[var(--text-secondary)] cursor-pointer select-none">
+        <div className="flex items-center gap-3 min-w-0 flex-wrap">
+          <label className="flex items-center gap-2 text-[11px] text-[var(--text-secondary)] cursor-pointer select-none shrink-0">
             <Toggle checked={checkBeforeImport} onChange={setCheckBeforeImport} />
-            导入前检测账号
+            导入前检测
           </label>
-          {/* Conflict resolution for accounts that already exist */}
-          <div className="flex items-center gap-1.5">
-            <span className="text-[10px] text-[var(--text-dim)] shrink-0">冲突处理</span>
+          <div className="w-px h-4 bg-[var(--border-subtle)] shrink-0" />
+          <div className="flex items-center gap-1 shrink-0">
+            <span className="text-[10px] text-[var(--text-dim)] mr-0.5">冲突</span>
             {conflictOptions.map((opt) => {
               const active = conflictMode === opt.value;
               return (
@@ -1031,7 +1160,7 @@ export function ImportCenter({ onClose }: { onClose: () => void }) {
                   key={opt.value}
                   onClick={() => setConflictMode(opt.value)}
                   title={opt.title}
-                  className={`rounded-md px-2 py-1 text-[10px] font-medium transition-all cursor-pointer ${
+                  className={`rounded-md px-1.5 py-0.5 text-[10px] font-medium transition-all cursor-pointer ${
                     active
                       ? "bg-[var(--color-brand)] text-white"
                       : "text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]"
@@ -1043,20 +1172,24 @@ export function ImportCenter({ onClose }: { onClose: () => void }) {
             })}
           </div>
           {checkResult && (
-            <div className="flex items-center gap-2">
-              <Tags size={12} className="text-[var(--text-dim)]" />
-              <input
-                value={batchTags}
-                onChange={(e) => setBatchTags(e.target.value)}
-                placeholder="导入后批量打标，逗号分隔"
-                className="h-7 min-w-[200px] rounded-md border px-2.5 text-[11px] outline-none bg-[var(--bg-surface)] text-[var(--text-primary)] placeholder:text-[var(--text-dim)]"
-                style={{ borderColor: "var(--border-default)" }}
-              />
-            </div>
+            <>
+              <div className="w-px h-4 bg-[var(--border-subtle)] shrink-0" />
+              <div className="flex items-center gap-1.5">
+                <Tags size={12} className="text-[var(--text-dim)] shrink-0" />
+                <input
+                  value={batchTags}
+                  onChange={(e) => setBatchTags(e.target.value)}
+                  placeholder="批量标签，逗号分隔"
+                  className="h-7 w-[160px] rounded-md border px-2 text-[10px] outline-none bg-[var(--bg-surface)] text-[var(--text-primary)] placeholder:text-[var(--text-dim)]"
+                  style={{ borderColor: "var(--border-default)" }}
+                />
+              </div>
+            </>
           )}
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 shrink-0">
           <Button variant="ghost" size="sm" onClick={onClose}>关闭</Button>
+          {/* Provider mode: check or direct import */}
           {mode === "provider" && template && method !== "oauth" && !checkResult && checkBeforeImport && (
             <Button
               size="sm"
@@ -1077,6 +1210,7 @@ export function ImportCenter({ onClose }: { onClose: () => void }) {
               <Upload size={13} /> 确认导入
             </Button>
           )}
+          {/* Scan mode: check or direct sync */}
           {mode === "scan" && !checkResult && checkBeforeImport && (
             <Button
               size="sm"
@@ -1094,9 +1228,10 @@ export function ImportCenter({ onClose }: { onClose: () => void }) {
               loading={executeImport.isPending}
               disabled={!canPreview}
             >
-              <Upload size={13} /> 一键同步已选账号
+              <Upload size={13} /> 同步已选账号
             </Button>
           )}
+          {/* Post-check: import actions */}
           {checkResult && (
             <>
               <Button
@@ -1106,7 +1241,7 @@ export function ImportCenter({ onClose }: { onClose: () => void }) {
                 loading={executeImport.isPending}
                 disabled={selectedFingerprints.size === 0}
               >
-                <Upload size={13} /> 同步已选账号
+                <Upload size={13} /> 仅导入
               </Button>
               <Button
                 size="sm"
@@ -1114,7 +1249,7 @@ export function ImportCenter({ onClose }: { onClose: () => void }) {
                 loading={executeImport.isPending}
                 disabled={selectedFingerprints.size === 0}
               >
-                <CheckCircle2 size={13} /> 导入并加入 API 服务
+                <CheckCircle2 size={13} /> 导入并启用路由
               </Button>
             </>
           )}
@@ -1124,34 +1259,13 @@ export function ImportCenter({ onClose }: { onClose: () => void }) {
   );
 }
 
-/* ---------- Step indicator helpers ---------- */
-
-function StepDot({ active, n, label }: { active: boolean; n: number; label: string }) {
-  return (
-    <div className="flex items-center gap-1.5">
-      <span
-        className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-semibold transition-colors ${
-          active ? "bg-[var(--color-brand)] text-white" : "bg-[var(--bg-hover)] text-[var(--text-dim)]"
-        }`}
-      >
-        {n}
-      </span>
-      <span className={`text-[10px] ${active ? "text-[var(--text-primary)] font-medium" : "text-[var(--text-dim)]"}`}>
-        {label}
-      </span>
-    </div>
-  );
-}
-
-function StepLine() {
-  return <div className="flex-1 h-px bg-[var(--border-subtle)]" />;
-}
+/* Step indicator helpers removed — stepper is now inline */
 
 /* ---------- Field label ---------- */
 
 function FieldLabel({ children, required }: { children: ReactNode; required?: boolean }) {
   return (
-    <div className="text-[11px] font-medium text-[var(--text-secondary)]">
+    <div className="text-[12px] font-medium text-[var(--text-secondary)]">
       {children}
       {required && <span className="text-[var(--color-err)] ml-0.5">*</span>}
     </div>
@@ -1204,10 +1318,10 @@ function InfoNote({ tone, children }: { tone: "info" | "warn"; children: ReactNo
 
 function SectionHeading({ icon: Icon, title, hint }: { icon: typeof KeyRound; title: string; hint?: string }) {
   return (
-    <div className="flex items-center gap-2 mb-2.5">
-      <Icon size={13} className="text-[var(--text-dim)]" />
-      <span className="text-[11px] font-semibold text-[var(--text-primary)]">{title}</span>
-      {hint && <span className="ml-auto text-[10px] text-[var(--text-dim)]">{hint}</span>}
+    <div className="flex items-center gap-2 mb-3">
+      <Icon size={14} className="text-[var(--text-dim)]" />
+      <span className="text-[13px] font-semibold text-[var(--text-primary)]">{title}</span>
+      {hint && <span className="ml-auto text-[11px] text-[var(--text-dim)]">{hint}</span>}
     </div>
   );
 }
@@ -1216,42 +1330,30 @@ function SectionHeading({ icon: Icon, title, hint }: { icon: typeof KeyRound; ti
 /*   Method-specific forms        */
 /* ============================== */
 
-/* ---------- API Key form ---------- */
+/* ---------- Model list section (used in two-column layout) ---------- */
 
-function ApiKeyForm(props: {
+function ModelListSection(props: {
   template: ModelResourceTemplate;
-  apiKey: string;
-  setApiKey: (v: string) => void;
-  resourceName: string;
-  setResourceName: (v: string) => void;
-  baseUrls: Partial<Record<Protocol, string>>;
-  setBaseUrls: (v: Partial<Record<Protocol, string>>) => void;
   customModels: string;
   setCustomModels: (v: string) => void;
-  selectedProtocols: Protocol[];
-  setSelectedProtocols: (v: Protocol[]) => void;
+  effectiveBaseUrl: string;
 }) {
   const { template } = props;
-  const selectedProtocol = props.selectedProtocols[0] || primaryProtocol(template);
-  const defaultBaseUrl = baseUrlForProtocol(template, selectedProtocol);
   const current = props.customModels.split(/[,\n]+/).map((s) => s.trim()).filter(Boolean);
   const fetchModels = useFetchUpstreamModels();
   const { toast } = useToast();
 
-  // Raw URL for display; normalization happens at request time.
-  const effectiveBaseUrl = props.baseUrls[selectedProtocol]?.trim() || defaultBaseUrl || "";
-
   const handleFetchModels = async () => {
-    if (!effectiveBaseUrl) {
+    if (!props.effectiveBaseUrl) {
       toast("warning", "请先填写 Base URL");
       return;
     }
     try {
-      const discoveryUrl = template.modelDiscovery?.url || effectiveBaseUrl;
-      const discoveryProtocol = template.modelDiscovery?.protocol || selectedProtocol;
+      const discoveryUrl = template.modelDiscovery?.url || props.effectiveBaseUrl;
+      const discoveryProtocol = template.modelDiscovery?.protocol || primaryProtocol(template) || "chat";
       const models = await fetchModels.mutateAsync({
         baseUrl: discoveryUrl,
-        apiKey: props.apiKey.trim() || undefined,
+        apiKey: undefined,
         protocol: discoveryProtocol,
       });
       if (models.length === 0) {
@@ -1274,41 +1376,263 @@ function ApiKeyForm(props: {
   };
 
   return (
-    <>
-      <SectionHeading icon={KeyRound} title="凭证配置" />
-      <div className="space-y-3">
-        {/* Resource name */}
+    <div className="space-y-4">
+      <div className="flex items-center gap-2">
+        <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-info)]" />
+        <span className="text-[13px] font-semibold text-[var(--text-primary)]">模型列表</span>
+        <span className="ml-auto text-[11px] text-[var(--text-dim)] pg-mono">{current.length} 个</span>
+      </div>
+
+      {template.models.length > 0 && (
+        <div className="flex flex-wrap gap-2">
+          {template.models.map((m) => {
+            const selected = current.includes(m);
+            return (
+              <button
+                key={m}
+                onClick={() => appendModel(m)}
+                className={`rounded-lg border px-3 py-1.5 text-[11px] font-medium transition-colors cursor-pointer ${
+                  selected
+                    ? "border-[var(--color-brand)] bg-[var(--color-brand-subtle)] text-[var(--color-brand)]"
+                    : "text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:border-[var(--border-strong)]"
+                }`}
+                style={{ borderColor: selected ? "var(--color-brand)" : "var(--border-subtle)" }}
+              >
+                {selected ? "✓ " : "+ "}{m}
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      <div
+        className="rounded-lg border overflow-hidden"
+        style={{ borderColor: "var(--border-default)", background: "var(--bg-surface)" }}
+      >
+        <textarea
+          value={current.join("\n")}
+          onChange={(e) => {
+            const value = e.target.value
+              .split(/[,\n]+/)
+              .map((s) => s.trim())
+              .filter(Boolean)
+              .join(", ");
+            props.setCustomModels(value);
+          }}
+          spellCheck={false}
+          placeholder="model-a\nmodel-b"
+          className="w-full min-h-[140px] max-h-[240px] resize-y bg-transparent p-4 text-[12px] font-mono outline-none"
+          style={{ color: "var(--text-primary)" }}
+        />
+        <div
+          className="px-4 py-3 flex items-center justify-between border-t"
+          style={{ borderColor: "var(--border-subtle)", background: "var(--bg-elevated)" }}
+        >
+          <span className="text-[11px] text-[var(--text-dim)]">
+            上游结果仅填入草稿，可在保存前调整。
+          </span>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={handleFetchModels}
+            loading={fetchModels.isPending}
+            disabled={!props.effectiveBaseUrl}
+          >
+            <RefreshCw size={12} /> 从上游获取
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ---------- API Key form ---------- */
+
+function ApiKeyForm(props: {
+  template: ModelResourceTemplate;
+  apiKey: string;
+  setApiKey: (v: string) => void;
+  resourceName: string;
+  setResourceName: (v: string) => void;
+  baseUrls: Partial<Record<Protocol, string>>;
+  setBaseUrls: (v: Partial<Record<Protocol, string>>) => void;
+  customModels: string;
+  setCustomModels: (v: string) => void;
+  selectedProtocols: Protocol[];
+  setSelectedProtocols: (v: Protocol[]) => void;
+  keyEntries: Array<{ id: string; name: string; value: string; reveal: boolean }>;
+  setKeyEntries: (v: Array<{ id: string; name: string; value: string; reveal: boolean }>) => void;
+  customProviderName: string;
+  setCustomProviderName: (v: string) => void;
+}) {
+  const { template } = props;
+  const isCustom = template.group === "custom";
+  const selectedProtocol = props.selectedProtocols[0] || primaryProtocol(template);
+  const defaultBaseUrl = baseUrlForProtocol(template, selectedProtocol);
+  const fetchModels = useFetchUpstreamModels();
+  const { toast } = useToast();
+
+  // Raw URL for display; normalization happens at request time.
+  const effectiveBaseUrl = props.baseUrls[selectedProtocol]?.trim() || defaultBaseUrl || "";
+
+  // Determine effective keys: use multi-key editor if entries exist, otherwise single key.
+  const effectiveKeys = props.keyEntries.length > 0
+    ? props.keyEntries.map((e) => e.value.trim()).filter(Boolean)
+    : props.apiKey.trim() ? [props.apiKey.trim()] : [];
+  const hasMultipleKeys = props.keyEntries.length > 0;
+
+  return (
+    <div className="space-y-6">
+      {/* ── Section 1: Provider Identity ── */}
+      <div
+        className="rounded-xl border p-5 space-y-4"
+        style={{ borderColor: "var(--border-subtle)", background: "var(--bg-surface)" }}
+      >
+        <div className="flex items-center gap-2">
+          <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-brand)]" />
+          <span className="text-[12px] font-semibold text-[var(--text-primary)]">供应商信息</span>
+        </div>
+
+        {isCustom && (
+          <div>
+            <FieldLabel required>供应商名称</FieldLabel>
+            <div className="mt-2">
+              <Input
+                value={props.customProviderName}
+                onChange={(e) => props.setCustomProviderName(e.target.value)}
+                placeholder="例如：小七中转站、Agent Router"
+              />
+            </div>
+            <div className="mt-1.5 text-[11px] text-[var(--text-dim)] leading-4">
+              自定义供应商需要填写独立名称，多个自定义供应商不能共用通用名。
+            </div>
+            {props.customProviderName.trim() && isGenericProviderName(props.customProviderName) && (
+              <div className="mt-1.5 text-[11px] text-[var(--color-err)]">
+                请使用独立名称，通用名会导致多个自定义供应商被合并。
+              </div>
+            )}
+          </div>
+        )}
+
         <div>
           <FieldLabel>资源名称</FieldLabel>
-          <div className="mt-1.5">
+          <div className="mt-2">
             <Input
               value={props.resourceName}
               onChange={(e) => props.setResourceName(e.target.value)}
-              placeholder={`${template.name} resource`}
+              placeholder={isCustom ? (props.customProviderName.trim() || "我的中转站") + " resource" : `${template.name} resource`}
             />
           </div>
-          <div className="mt-1 text-[10px] text-[var(--text-dim)]">
-            留空时使用「{template.name} resource」作为默认资源名，导入后可在资源详情中修改。
+          <div className="mt-1.5 text-[11px] text-[var(--text-dim)]">
+            留空时使用默认资源名，导入后可修改。
           </div>
         </div>
+      </div>
 
-        {/* API Key */}
-        <div>
-          <FieldLabel required>API Key</FieldLabel>
-          <div className="mt-1.5">
+      {/* ── Section 2: Credentials ── */}
+      <div
+        className="rounded-xl border p-5 space-y-4"
+        style={{ borderColor: "var(--border-subtle)", background: "var(--bg-surface)" }}
+      >
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-ok)]" />
+            <span className="text-[12px] font-semibold text-[var(--text-primary)]">
+              凭证{props.keyEntries.length > 0 ? ` · ${props.keyEntries.length} 个 Key` : ""}
+            </span>
+          </div>
+          <button
+            type="button"
+            className="text-[11px] text-[var(--color-brand)] hover:underline cursor-pointer"
+            onClick={() => {
+              if (props.keyEntries.length === 0 && props.apiKey.trim()) {
+                props.setKeyEntries([createKeyEntry(props.apiKey.trim(), props.resourceName.trim())]);
+                props.setApiKey("");
+              } else {
+                props.setKeyEntries([...props.keyEntries, createKeyEntry()]);
+              }
+            }}
+          >
+            {props.keyEntries.length === 0 ? "添加多个 Key" : "+ 添加 Key"}
+          </button>
+        </div>
+
+        {props.keyEntries.length === 0 ? (
+          <div>
             <Input
               value={props.apiKey}
               onChange={(e) => props.setApiKey(e.target.value)}
               placeholder="sk-..."
               className="font-mono"
             />
+            <div className="mt-2 text-[11px] text-[var(--text-dim)] leading-4">
+              每个 Key 生成一个独立账号，支持轮询调度。点击上方「添加多个 Key」可批量添加。
+            </div>
           </div>
+        ) : (
+          <div className="space-y-3">
+            {props.keyEntries.map((entry, i) => (
+              <div key={entry.id} className="flex items-start gap-2.5">
+                <span className="mt-2 w-6 shrink-0 text-center text-[11px] tabular-nums text-[var(--text-dim)]">{i + 1}</span>
+                <div className="flex-1 space-y-2">
+                  <input
+                    type="text"
+                    className="h-9 w-full rounded-lg border px-3 text-[12px] outline-none transition-colors focus:ring-2 focus:ring-[var(--color-brand)]/40"
+                    style={{ backgroundColor: "var(--bg-elevated)", borderColor: "var(--border-default)", color: "var(--text-primary)" }}
+                    value={entry.name}
+                    onChange={(e) => props.setKeyEntries(props.keyEntries.map((x) => x.id === entry.id ? { ...x, name: e.target.value } : x))}
+                    placeholder="名称（可选，如：工作账号）"
+                  />
+                  <div className="flex items-center gap-2">
+                    <input
+                      type={entry.reveal ? "text" : "password"}
+                      className="h-9 flex-1 rounded-lg border px-3 font-mono text-[12px] outline-none transition-colors focus:ring-2 focus:ring-[var(--color-brand)]/40"
+                      style={{ backgroundColor: "var(--bg-elevated)", borderColor: "var(--border-default)", color: "var(--text-primary)" }}
+                      value={entry.value}
+                      onChange={(e) => props.setKeyEntries(props.keyEntries.map((x) => x.id === entry.id ? { ...x, value: e.target.value } : x))}
+                      placeholder="sk-..."
+                    />
+                    <button
+                      type="button"
+                      onClick={() => props.setKeyEntries(props.keyEntries.map((x) => x.id === entry.id ? { ...x, reveal: !x.reveal } : x))}
+                      className="p-2 rounded-lg transition-colors text-[var(--text-dim)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)] cursor-pointer"
+                      title={entry.reveal ? "隐藏 Key" : "明文查看"}
+                    >
+                      {entry.reveal ? <EyeOff size={15} /> : <KeyRound size={15} />}
+                    </button>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => props.setKeyEntries(props.keyEntries.filter((x) => x.id !== entry.id))}
+                  className="mt-2 p-2 rounded-lg transition-colors text-[var(--text-dim)] hover:text-[var(--color-err)] hover:bg-[var(--color-err-bg)] cursor-pointer"
+                  title="删除该 Key"
+                >
+                  <X size={15} />
+                </button>
+              </div>
+            ))}
+            <div className="text-[11px] text-[var(--text-dim)]">
+              每个 Key 生成一个独立账号，支持轮询调度。
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* ── Section 3: Connection ── */}
+      <div
+        className="rounded-xl border p-5 space-y-4"
+        style={{ borderColor: "var(--border-subtle)", background: "var(--bg-surface)" }}
+      >
+        <div className="flex items-center gap-2">
+          <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-info)]" />
+          <span className="text-[12px] font-semibold text-[var(--text-primary)]">连接配置</span>
         </div>
 
-        {/* Protocol / API format */}
+        {/* Protocol selector */}
         <div>
           <FieldLabel required>API 格式</FieldLabel>
-          <div className="mt-1.5 flex items-center gap-1.5 flex-wrap">
+          <div className="mt-2 flex items-center gap-2 flex-wrap">
             {protocolOptions.map((opt) => {
               const supported = template.protocols.length === 0 || template.protocols.includes(opt.value);
               const active = props.selectedProtocols.includes(opt.value);
@@ -1331,7 +1655,7 @@ function ApiKeyForm(props: {
                       });
                     }
                   }}
-                  className={`rounded-md border px-3 py-1.5 text-[11px] font-medium transition-all ${
+                  className={`rounded-lg border px-3.5 py-2 text-[12px] font-medium transition-all cursor-pointer ${
                     active
                       ? "bg-[var(--color-brand)] text-white border-[var(--color-brand)]"
                       : supported
@@ -1344,16 +1668,15 @@ function ApiKeyForm(props: {
               );
             })}
           </div>
-          <div className="mt-1 text-[10px] text-[var(--text-dim)]">
+          <div className="mt-2 text-[11px] text-[var(--text-dim)] leading-4">
             可同时启用多个协议；同一 API Key 只接入一次，客户端调用时自动选择对应上游地址。
           </div>
         </div>
 
-        {/* Protocol-specific Base URLs */}
-        <div className="space-y-2">
+        {/* Base URLs */}
+        <div className="space-y-3">
           <FieldLabel required>协议 Base URL</FieldLabel>
           {template.protocols.length === 0 ? (
-            /* Custom template: single shared Base URL for all protocols */
             <Input
               value={props.baseUrls[props.selectedProtocols[0]] || ""}
               onChange={(e) => {
@@ -1367,8 +1690,8 @@ function ApiKeyForm(props: {
             />
           ) : (
             props.selectedProtocols.map((protocol) => (
-              <div key={protocol} className="grid grid-cols-[150px_1fr] items-center gap-2">
-                <div className="text-[10px] font-medium text-[var(--text-secondary)]">
+              <div key={protocol} className="grid grid-cols-[160px_1fr] items-center gap-3">
+                <div className="text-[11px] font-medium text-[var(--text-secondary)]">
                   {protocolLabel(protocol)}
                 </div>
                 <Input
@@ -1382,92 +1705,112 @@ function ApiKeyForm(props: {
               </div>
             ))
           )}
-          <div className="text-[10px] text-[var(--text-dim)]">
+          <div className="text-[11px] text-[var(--text-dim)] leading-4">
             {template.protocols.length === 0
               ? "所有协议共用同一个 Base URL，网关会自动拼接各协议的请求路径。"
               : "已按厂商模板自动填写，每个协议地址都可以单独修改。"}
           </div>
-          <InfoNote tone="info">
-            <span className="font-medium">Base URL 填写标准：</span>只填到协议挂载点（如{" "}
-            <span className="pg-mono">https://api.deepseek.com</span> 或{" "}
-            <span className="pg-mono">https://api.deepseek.com/anthropic</span>），网关会自动拼接{" "}
-            <span className="pg-mono">/v1/chat/completions</span>、<span className="pg-mono">/v1/messages</span>{" "}
-            等路径。若粘贴了完整接口地址，系统会自动截去 <span className="pg-mono">/v1</span>、
-            <span className="pg-mono">/chat/completions</span> 等后缀。
-          </InfoNote>
         </div>
+
+        <InfoNote tone="info">
+          <span className="font-medium">Base URL 填写标准：</span>只填到协议挂载点（如{" "}
+          <span className="pg-mono">https://api.deepseek.com</span>），网关会自动拼接{" "}
+          <span className="pg-mono">/v1/chat/completions</span> 等路径。
+        </InfoNote>
       </div>
 
-      {/* Model list */}
-      <div className="mt-4">
-        <SectionHeading icon={Boxes} title="模型列表" hint={`${current.length} 个模型`} />
+      {/* ── Section 4: Models ── */}
+      <div
+        className="rounded-xl border p-5 space-y-4"
+        style={{ borderColor: "var(--border-subtle)", background: "var(--bg-surface)" }}
+      >
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-info)]" />
+            <span className="text-[12px] font-semibold text-[var(--text-primary)]">模型列表</span>
+            <span className="text-[11px] text-[var(--text-dim)] pg-mono">
+              {props.customModels ? props.customModels.split(",").filter(Boolean).length : template.models.length} 个
+            </span>
+          </div>
+          <button
+            type="button"
+            className="text-[11px] text-[var(--color-brand)] hover:underline cursor-pointer flex items-center gap-1"
+            onClick={async () => {
+              if (!effectiveBaseUrl) {
+                toast("warning", "请先填写 Base URL");
+                return;
+              }
+              try {
+                const discoveryUrl = template.modelDiscovery?.url || effectiveBaseUrl;
+                const discoveryProtocol = template.modelDiscovery?.protocol || primaryProtocol(template) || "chat";
+                const models = await fetchModels.mutateAsync({ baseUrl: discoveryUrl, apiKey: undefined, protocol: discoveryProtocol });
+                if (models.length > 0) {
+                  props.setCustomModels(models.join(", "));
+                  toast("success", `已获取 ${models.length} 个模型`);
+                } else {
+                  toast("warning", "上游未返回任何模型");
+                }
+              } catch (err) {
+                toast("error", `获取模型失败: ${String(err)}`);
+              }
+            }}
+          >
+            <RefreshCw size={11} /> 获取模型
+          </button>
+        </div>
 
-        {/* Preset model chips */}
+        {/* Quick select chips */}
         {template.models.length > 0 && (
-          <div className="flex flex-wrap gap-1.5 mb-2.5">
+          <div className="flex flex-wrap gap-2">
             {template.models.map((m) => {
+              const current = props.customModels ? props.customModels.split(",").map((s) => s.trim()).filter(Boolean) : [];
               const selected = current.includes(m);
               return (
                 <button
                   key={m}
-                  onClick={() => appendModel(m)}
-                  className={`rounded-md border px-2.5 py-1 text-[10px] font-medium transition-colors ${
+                  type="button"
+                  onClick={() => {
+                    const next = selected
+                      ? current.filter((c) => c !== m)
+                      : [...current, m];
+                    props.setCustomModels(next.join(", "));
+                  }}
+                  className={`rounded-lg border px-3 py-1.5 text-[11px] font-medium transition-colors cursor-pointer ${
                     selected
                       ? "border-[var(--color-brand)] bg-[var(--color-brand-subtle)] text-[var(--color-brand)]"
-                      : "text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:border-[var(--border-strong)]"
+                      : "text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] border-[var(--border-subtle)]"
                   }`}
-                  style={{
-                    borderColor: selected ? "var(--color-brand)" : "var(--border-subtle)",
-                  }}
                 >
-                  {selected ? "✓ " : "+ "}
-                  {m}
+                  {selected ? "✓ " : "+ "}{m}
                 </button>
               );
             })}
           </div>
         )}
 
-        {/* Editable model list */}
-        <div
-          className="rounded-lg border overflow-hidden"
-          style={{ borderColor: "var(--border-default)", background: "var(--bg-surface)" }}
-        >
+        {/* Model input */}
+        <div>
           <textarea
-            value={current.join("\n")}
+            value={props.customModels ? props.customModels.split(",").map((s) => s.trim()).filter(Boolean).join("\n") : ""}
             onChange={(e) => {
               const value = e.target.value
-                .split(/[,\n]+/)
+                .split(/[\n,]+/)
                 .map((s) => s.trim())
                 .filter(Boolean)
                 .join(", ");
               props.setCustomModels(value);
             }}
             spellCheck={false}
-            placeholder="model-a\nmodel-b"
-            className="w-full min-h-[120px] max-h-[220px] resize-y bg-transparent p-3 text-xs font-mono outline-none"
-            style={{ color: "var(--text-primary)" }}
+            placeholder="每行一个模型名称，或用逗号分隔&#10;model-a&#10;model-b"
+            className="w-full min-h-[100px] max-h-[200px] resize-y rounded-lg border bg-[var(--bg-elevated)] p-3 text-[12px] font-mono outline-none focus:ring-2 focus:ring-[var(--color-brand)]/25"
+            style={{ borderColor: "var(--border-default)", color: "var(--text-primary)" }}
           />
-          <div
-            className="px-3 py-2 flex items-center justify-between border-t"
-            style={{ borderColor: "var(--border-subtle)", background: "var(--bg-elevated)" }}
-          >
-            <span className="text-[10px] text-[var(--text-dim)]">
-              上游结果仅填入当前草稿，可在保存前删除、补充或调整模型。
-            </span>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={handleFetchModels}
-              loading={fetchModels.isPending}
-              disabled={!effectiveBaseUrl}
-            >
-              <RefreshCw size={12} /> 从上游获取
-            </Button>
+          <div className="mt-2 text-[11px] text-[var(--text-dim)]">
+            留空使用模板默认模型列表，或手动输入要启用的模型名称。
           </div>
         </div>
       </div>
-    </>
+    </div>
   );
 }
 
@@ -1480,57 +1823,62 @@ function TokenForm(props: {
   setShowHint: (v: boolean) => void;
 }) {
   return (
-    <>
-      <SectionHeading icon={Braces} title="凭证输入" />
-      <div className="space-y-2.5">
-        <div className="text-[11px] leading-5 text-[var(--text-secondary)]">
-          粘贴 <span className="pg-mono text-[var(--text-primary)]">auth.json</span>、Sub2API JSON、accessToken、refresh_token 或其他账号 JSON。
-        </div>
-
-        {/* Format hint toggle */}
-        <button
-          onClick={() => props.setShowHint(!props.showHint)}
-          className="w-full flex items-center justify-between rounded-md border px-3 py-1.5 text-[11px] text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] transition-colors"
-          style={{ borderColor: "var(--border-subtle)" }}
-        >
-          <span className="flex items-center gap-1.5">
-            <TriangleAlert size={12} className="text-[var(--color-warn)]" />
-            字段格式与示例
-          </span>
-          <ChevronDown
-            size={14}
-            className={`transition-transform ${props.showHint ? "rotate-180" : ""}`}
-          />
-        </button>
-        {props.showHint && (
-          <div
-            className="rounded-md border p-3 text-[10px] font-mono text-[var(--text-secondary)] leading-6"
-            style={{ borderColor: "var(--border-subtle)", background: "var(--bg-elevated)" }}
-          >
-            <div className="text-[var(--text-dim)]"># Codex auth.json</div>
-            <div>{`{ "OPENAI_API_KEY": "sk-...", "tokens": { "access_token": "...", "refresh_token": "..." } }`}</div>
-            <div className="mt-2 text-[var(--text-dim)]"># Sub2API / CPA / Cockpit 账号 JSON</div>
-            <div>{`{ "type": "codex", "access_token": "...", "refresh_token": "...", "account_id": "..." }`}</div>
-            <div className="mt-2 text-[var(--text-dim)]"># 仅 refresh_token</div>
-            <div>rt_xxx...</div>
-          </div>
-        )}
-
-        {/* Textarea */}
-        <textarea
-          value={props.content}
-          onChange={(e) => props.setContent(e.target.value)}
-          spellCheck={false}
-          placeholder="在此粘贴 JSON 或 Token..."
-          className="w-full h-[140px] resize-none rounded-md border p-3 text-xs font-mono outline-none focus:ring-1 focus:ring-[var(--color-brand)] transition-colors"
-          style={{
-            background: "var(--bg-surface)",
-            borderColor: "var(--border-default)",
-            color: "var(--text-primary)",
-          }}
-        />
+    <div
+      className="rounded-xl border p-5 space-y-4"
+      style={{ borderColor: "var(--border-subtle)", background: "var(--bg-surface)" }}
+    >
+      <div className="flex items-center gap-2">
+        <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-brand)]" />
+        <span className="text-[13px] font-semibold text-[var(--text-primary)]">凭证输入</span>
       </div>
-    </>
+
+      <div className="text-[12px] leading-5 text-[var(--text-secondary)]">
+        粘贴 <span className="pg-mono text-[var(--text-primary)]">auth.json</span>、Sub2API JSON、accessToken、refresh_token 或其他账号 JSON。
+      </div>
+
+      {/* Format hint toggle */}
+      <button
+        onClick={() => props.setShowHint(!props.showHint)}
+        className="w-full flex items-center justify-between rounded-lg border px-3.5 py-2.5 text-[12px] text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] transition-colors cursor-pointer"
+        style={{ borderColor: "var(--border-subtle)" }}
+      >
+        <span className="flex items-center gap-2">
+          <TriangleAlert size={13} className="text-[var(--color-warn)]" />
+          字段格式与示例
+        </span>
+        <ChevronDown
+          size={15}
+          className={`transition-transform ${props.showHint ? "rotate-180" : ""}`}
+        />
+      </button>
+      {props.showHint && (
+        <div
+          className="rounded-lg border p-4 text-[11px] font-mono text-[var(--text-secondary)] leading-6"
+          style={{ borderColor: "var(--border-subtle)", background: "var(--bg-elevated)" }}
+        >
+          <div className="text-[var(--text-dim)]"># Codex auth.json</div>
+          <div>{`{ "OPENAI_API_KEY": "sk-...", "tokens": { "access_token": "...", "refresh_token": "..." } }`}</div>
+          <div className="mt-3 text-[var(--text-dim)]"># Sub2API / CPA / Cockpit 账号 JSON</div>
+          <div>{`{ "type": "codex", "access_token": "...", "refresh_token": "...", "account_id": "..." }`}</div>
+          <div className="mt-3 text-[var(--text-dim)]"># 仅 refresh_token</div>
+          <div>rt_xxx...</div>
+        </div>
+      )}
+
+      {/* Textarea */}
+      <textarea
+        value={props.content}
+        onChange={(e) => props.setContent(e.target.value)}
+        spellCheck={false}
+        placeholder="在此粘贴 JSON 或 Token..."
+          className="w-full h-[160px] resize-none rounded-lg border p-4 text-[12px] font-mono outline-none focus:ring-2 focus:ring-[var(--color-brand)]/30 transition-colors"
+        style={{
+          background: "var(--bg-elevated)",
+          borderColor: "var(--border-default)",
+          color: "var(--text-primary)",
+        }}
+      />
+    </div>
   );
 }
 
@@ -1555,19 +1903,26 @@ function OauthForm(props: {
 }) {
   const { template } = props;
   return (
-    <>
-      <SectionHeading icon={Globe2} title="OAuth 授权" />
-      <div className="space-y-3">
-        <div className="text-[11px] leading-5 text-[var(--text-secondary)]">
+    <div className="space-y-5">
+      <div
+        className="rounded-xl border p-5 space-y-4"
+        style={{ borderColor: "var(--border-subtle)", background: "var(--bg-surface)" }}
+      >
+        <div className="flex items-center gap-2">
+          <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-brand)]" />
+          <span className="text-[13px] font-semibold text-[var(--text-primary)]">OAuth 授权</span>
+        </div>
+
+        <div className="text-[12px] leading-5 text-[var(--text-secondary)]">
           通过浏览器 OAuth 授权获取 <strong className="text-[var(--text-primary)]">{template.name}</strong> 账号 Token。
           授权完成后将回调地址粘贴到下方。
         </div>
 
         {/* Two-column: Email + Note */}
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-2 gap-4">
           <div>
             <FieldLabel required>账号邮箱</FieldLabel>
-            <div className="mt-1.5">
+            <div className="mt-2">
               <Input
                 value={props.email}
                 onChange={(e) => props.setEmail(e.target.value)}
@@ -1577,7 +1932,7 @@ function OauthForm(props: {
           </div>
           <div>
             <FieldLabel>备注（可选）</FieldLabel>
-            <div className="mt-1.5">
+            <div className="mt-2">
               <Input
                 value={props.note}
                 onChange={(e) => props.setNote(e.target.value)}
@@ -1590,21 +1945,21 @@ function OauthForm(props: {
         {/* Authorization link */}
         <div>
           <FieldLabel>授权链接</FieldLabel>
-          <div className="mt-1.5 flex items-center gap-2">
+          <div className="mt-2 flex items-center gap-2">
             <code
-              className="flex-1 truncate rounded-md border px-3 py-2 text-[11px] font-mono text-[var(--text-secondary)]"
-              style={{ borderColor: "var(--border-default)", background: "var(--bg-surface)" }}
+              className="flex-1 truncate rounded-lg border px-3.5 py-2.5 text-[11px] font-mono text-[var(--text-secondary)]"
+              style={{ borderColor: "var(--border-default)", background: "var(--bg-elevated)" }}
             >
               {props.authorizationUrl || "发起授权后生成一次性 PKCE 链接"}
             </code>
             <button
               onClick={props.onCopy}
               disabled={!props.authorizationUrl}
-              className="w-9 h-9 rounded-md border flex items-center justify-center text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] transition-colors disabled:opacity-40"
+              className="w-10 h-10 rounded-lg border flex items-center justify-center text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] transition-colors disabled:opacity-40 cursor-pointer"
               style={{ borderColor: "var(--border-default)" }}
               title="复制"
             >
-              <Copy size={14} />
+              <Copy size={15} />
             </button>
           </div>
         </div>
@@ -1633,7 +1988,7 @@ function OauthForm(props: {
         {/* Callback URL */}
         <div>
           <FieldLabel>回调地址</FieldLabel>
-          <div className="mt-1.5">
+          <div className="mt-2">
             <Input
               value={props.callbackUrl}
               onChange={(e) => props.setCallbackUrl(e.target.value)}
@@ -1649,7 +2004,7 @@ function OauthForm(props: {
           ? "支持 PKCE、state 校验、本地回调与手动粘贴回调地址。OAuth 凭证会保存在本机数据库，不返回前端。"
           : `${template.name} 的 OAuth 适配器尚未配置，请使用 Token & JSON 方式接入。`}
       </InfoNote>
-    </>
+    </div>
   );
 }
 
@@ -1661,36 +2016,48 @@ function BatchForm(props: {
   onClear: () => void;
 }) {
   return (
-    <>
-      <SectionHeading icon={Upload} title="文件选择" hint={props.paths.length ? `${props.paths.length} 个文件` : undefined} />
-      <div className="space-y-3">
-        <div className="text-[11px] leading-5 text-[var(--text-secondary)]">
+    <div className="space-y-5">
+      <div
+        className="rounded-xl border p-5 space-y-4"
+        style={{ borderColor: "var(--border-subtle)", background: "var(--bg-surface)" }}
+      >
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-brand)]" />
+            <span className="text-[13px] font-semibold text-[var(--text-primary)]">文件导入</span>
+          </div>
+          {props.paths.length > 0 && (
+            <span className="text-[11px] text-[var(--text-dim)] pg-mono">{props.paths.length} 个文件</span>
+          )}
+        </div>
+
+        <div className="text-[12px] leading-5 text-[var(--text-secondary)]">
           选择 JSON / CSV / TXT 文件批量导入。支持 Sub2API、CPA、Cockpit、Codex auth.json、API Key 文本混合格式。
         </div>
 
         <button
           onClick={props.paths.length ? props.onClear : props.onPick}
-          className="w-full rounded-md border bg-[var(--bg-surface)] px-4 py-3 text-xs text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] transition-colors"
+          className="w-full rounded-xl border-2 border-dashed bg-[var(--bg-elevated)] px-6 py-8 text-[13px] text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:border-[var(--color-brand)]/40 transition-all cursor-pointer"
           style={{ borderColor: "var(--border-default)" }}
         >
           {props.paths.length ? (
-            <span className="flex items-center justify-center gap-2">
-              <FolderOpen size={14} /> 已选 {props.paths.length} 个文件，点击重新选择
+            <span className="flex items-center justify-center gap-2.5">
+              <FolderOpen size={18} /> 已选 {props.paths.length} 个文件，点击重新选择
             </span>
           ) : (
-            <span className="flex items-center justify-center gap-2">
-              <FolderOpen size={14} /> 从本地文件导入
+            <span className="flex items-center justify-center gap-2.5">
+              <FolderOpen size={18} /> 从本地文件导入
             </span>
           )}
         </button>
 
         {props.paths.length > 0 && (
           <div
-            className="rounded-md border p-3 text-[11px] font-mono text-[var(--text-secondary)] max-h-[100px] overflow-auto"
+            className="rounded-lg border p-3 text-[11px] font-mono text-[var(--text-secondary)] max-h-[120px] overflow-auto"
             style={{ borderColor: "var(--border-subtle)", background: "var(--bg-elevated)" }}
           >
             {props.paths.map((p) => (
-              <div key={p} className="truncate">
+              <div key={p} className="truncate py-0.5">
                 {p}
               </div>
             ))}
@@ -1701,7 +2068,7 @@ function BatchForm(props: {
       <InfoNote tone="info">
         系统在生成模型供应商前会先脱敏预览，并按 SHA-256 指纹去重。
       </InfoNote>
-    </>
+    </div>
   );
 }
 
@@ -1971,17 +2338,15 @@ function CheckResultPanel(props: {
   );
 
   return (
-    <div className="px-5 py-3 flex flex-col min-h-0">
+    <div className="px-4 py-3 flex flex-col min-h-0 h-full">
       {/* Header */}
       <div className="flex items-center justify-between mb-2 shrink-0">
-        <div className="text-[11px] font-semibold text-[var(--text-primary)]">检测完成</div>
-        <div className="text-[10px] text-[var(--text-dim)]">
-          已选 {selected.size}/{result.accounts.length}
-        </div>
+        <div className="text-[12px] font-semibold text-[var(--text-primary)]">检测结果</div>
+        <Badge variant="brand">{selected.size}/{result.accounts.length} 已选</Badge>
       </div>
 
       {/* Summary cards */}
-      <div className="grid grid-cols-4 gap-1.5 mb-3 shrink-0">
+      <div className="grid grid-cols-2 gap-1.5 mb-3 shrink-0">
         <SummaryCell label="可导入" value={result.summary.ready} tone="ok" />
         <SummaryCell label="异常" value={result.summary.abnormal} tone="err" />
         <SummaryCell label="已存在" value={result.summary.duplicates} tone="mute" />
@@ -1989,36 +2354,36 @@ function CheckResultPanel(props: {
       </div>
 
       {/* Batch actions */}
-      <div className="flex items-center gap-2 mb-2 shrink-0">
+      <div className="flex items-center gap-1.5 mb-2 shrink-0 flex-wrap">
         <button
           onClick={props.onSelectAll}
           className="text-[10px] px-2 py-1 rounded-md border hover:bg-[var(--bg-hover)] transition-colors"
           style={{ borderColor: "var(--border-subtle)", color: "var(--text-secondary)" }}
         >
-          选择全部
+          全选
         </button>
         <button
           onClick={props.onSelectHealthy}
           className="text-[10px] px-2 py-1 rounded-md border hover:bg-[var(--bg-hover)] transition-colors"
           style={{ borderColor: "var(--border-subtle)", color: "var(--text-secondary)" }}
         >
-          选择正常
+          仅正常
         </button>
         <button
           onClick={props.onClearSelection}
           className="text-[10px] px-2 py-1 rounded-md border hover:bg-[var(--bg-hover)] transition-colors"
           style={{ borderColor: "var(--border-subtle)", color: "var(--text-secondary)" }}
         >
-          取消选择
+          清除
         </button>
       </div>
 
-      {/* Account list */}
+      {/* Account list — scrollable to fill available space */}
       <div
         className="rounded-md border overflow-hidden flex-1 min-h-0"
         style={{ borderColor: "var(--border-subtle)" }}
       >
-        <div className="overflow-y-auto max-h-[220px]">
+        <div className="overflow-y-auto h-full">
           {result.accounts.map((account) => (
             <CheckResultItem
               key={account.fingerprint}
@@ -2032,9 +2397,9 @@ function CheckResultPanel(props: {
 
       {/* Error examples */}
       {abnormal.length > 0 && (
-        <div className="mt-2 text-[10px] leading-5 text-[var(--color-err)] shrink-0">
-          <div className="font-medium">{abnormal[0].name}</div>
-          <div className="truncate">API 返回错误 {abnormal[0].health_message}</div>
+        <div className="mt-2 text-[10px] leading-4 text-[var(--color-err)] shrink-0">
+          <span className="font-medium">{abnormal[0].name}</span>
+          <span className="ml-1 truncate">— {abnormal[0].health_message}</span>
         </div>
       )}
     </div>

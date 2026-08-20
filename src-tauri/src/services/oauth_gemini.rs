@@ -36,7 +36,8 @@ const GOOGLE_AUTHORIZE_URL: &str = "https://accounts.google.com/o/oauth2/auth";
 const GOOGLE_TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 
 /// Gemini OAuth client ID (public, no secret required for native apps).
-const GEMINI_CLIENT_ID: &str = "764086051850-6qr4p6gpi6hn506pt8ejuq83di341hur.apps.googleusercontent.com";
+const GEMINI_CLIENT_ID: &str =
+    "764086051850-6qr4p6gpi6hn506pt8ejuq83di341hur.apps.googleusercontent.com";
 
 /// OAuth scope for Gemini API access.
 const GEMINI_SCOPE: &str = "https://www.googleapis.com/auth/generative-language";
@@ -307,12 +308,16 @@ fn persist_gemini_account(
                 name: "Google Gemini".into(),
                 provider_type: "gemini".into(),
                 base_url: "https://generativelanguage.googleapis.com".into(),
-                base_urls: Some("{\"gemini\":\"https://generativelanguage.googleapis.com\"}".into()),
+                base_urls: Some(
+                    "{\"gemini\":\"https://generativelanguage.googleapis.com\"}".into(),
+                ),
                 protocol: "gemini".into(),
                 protocols: Some("[\"gemini\"]".into()),
                 route_takeover: Some(1),
                 api_keys: None,
-                models: Some("[\"gemini-2.5-pro\",\"gemini-2.5-flash\",\"gemini-2.0-flash\"]".into()),
+                models: Some(
+                    "[\"gemini-2.5-pro\",\"gemini-2.5-flash\",\"gemini-2.0-flash\"]".into(),
+                ),
                 proxy_url: None,
                 custom_headers: None,
                 timeout_ms: Some(30000),
@@ -320,13 +325,16 @@ fn persist_gemini_account(
                 enabled: Some(true),
                 created_at: None,
                 auth_mode: Some("oauth_pkce".into()),
-                oauth_config: Some(serde_json::json!({
-                    "authorize_url": GOOGLE_AUTHORIZE_URL,
-                    "token_url": GOOGLE_TOKEN_URL,
-                    "client_id": GEMINI_CLIENT_ID,
-                    "scope": GEMINI_SCOPE,
-                    "redirect_port": 8085
-                }).to_string()),
+                oauth_config: Some(
+                    serde_json::json!({
+                        "authorize_url": GOOGLE_AUTHORIZE_URL,
+                        "token_url": GOOGLE_TOKEN_URL,
+                        "client_id": GEMINI_CLIENT_ID,
+                        "scope": GEMINI_SCOPE,
+                        "redirect_port": 8085
+                    })
+                    .to_string(),
+                ),
             },
         )?;
     }
@@ -374,12 +382,14 @@ fn persist_gemini_account(
 
     // Auto-add to routing pool.
     // provider_id was moved into account.provider_id, so read it from account.
-    let provider = state.db.providers.get_by_id(
-        &state.db.conn,
-        account.provider_id.as_deref().unwrap_or(""),
-    )?
-    .ok_or_else(|| "Provider not found after creation".to_string())?;
-    let models: Vec<String> = provider.models.as_deref()
+    let provider = state
+        .db
+        .providers
+        .get_by_id(&state.db.conn, account.provider_id.as_deref().unwrap_or(""))?
+        .ok_or_else(|| "Provider not found after creation".to_string())?;
+    let models: Vec<String> = provider
+        .models
+        .as_deref()
         .and_then(|raw| serde_json::from_str(raw).ok())
         .unwrap_or_default();
     crate::services::pool_onboarding::ensure_account_in_pool(

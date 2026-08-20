@@ -153,7 +153,7 @@ async fn fetch_models_for_account(
     let credential = auth_credential(account)?;
     if crate::services::codex_adapter::is_codex_oauth(account, provider) {
         let context = crate::services::codex_adapter::request_context(account)?;
-        let request = client().get(crate::services::codex_adapter::CODEX_MODELS_URL);
+        let request = client().get(crate::services::codex_adapter::codex_models_url());
         let request = crate::services::codex_adapter::apply_json_headers(request, &context);
         return send_model_request(request).await;
     }

@@ -85,14 +85,17 @@ pub struct ClaudeOAuthStartResult {
 /// Start a Claude Code OAuth PKCE login flow.
 ///
 /// `plan_type` must be "pro" or "max" to select the correct authorize endpoint.
-pub async fn start_claude_oauth(
-    plan_type: String,
-) -> Result<ClaudeOAuthStartResult, String> {
+pub async fn start_claude_oauth(plan_type: String) -> Result<ClaudeOAuthStartResult, String> {
     let plan = plan_type.trim().to_lowercase();
     let authorize_url = match plan.as_str() {
         "pro" => CLAUDE_AUTHORIZE_URL_PRO,
         "max" => CLAUDE_AUTHORIZE_URL_MAX,
-        _ => return Err(format!("不支持的 Claude 计划类型 '{}'，请选择 'pro' 或 'max'", plan_type)),
+        _ => {
+            return Err(format!(
+                "不支持的 Claude 计划类型 '{}'，请选择 'pro' 或 'max'",
+                plan_type
+            ))
+        }
     };
 
     let login_id = format!("claude_oauth_{}", Uuid::new_v4().simple());
@@ -355,14 +358,19 @@ fn persist_claude_account(
     }
 
     let models = match plan_type {
-        "max" => "[\"claude-opus-4-20250514\",\"claude-sonnet-4-20250514\",\"claude-3-haiku-20240307\"]",
+        "max" => {
+            "[\"claude-opus-4-20250514\",\"claude-sonnet-4-20250514\",\"claude-3-haiku-20240307\"]"
+        }
         _ => "[\"claude-sonnet-4-20250514\",\"claude-3-haiku-20240307\"]",
     };
 
     let account = Account {
         id: format!("acct_{}", Uuid::new_v4().simple()),
         provider_id: Some(provider_id),
-        name: Some(format!("Claude {} account", if plan_type == "max" { "Max" } else { "Pro" })),
+        name: Some(format!(
+            "Claude {} account",
+            if plan_type == "max" { "Max" } else { "Pro" }
+        )),
         api_key: token.access_token,
         models: Some(models.into()),
         quota_limit: None,
@@ -402,12 +410,14 @@ fn persist_claude_account(
 
     // Auto-add to routing pool.
     // provider_id was moved into account.provider_id, so read it from account.
-    let provider = state.db.providers.get_by_id(
-        &state.db.conn,
-        account.provider_id.as_deref().unwrap_or(""),
-    )?
-    .ok_or_else(|| "Provider not found after creation".to_string())?;
-    let models: Vec<String> = provider.models.as_deref()
+    let provider = state
+        .db
+        .providers
+        .get_by_id(&state.db.conn, account.provider_id.as_deref().unwrap_or(""))?
+        .ok_or_else(|| "Provider not found after creation".to_string())?;
+    let models: Vec<String> = provider
+        .models
+        .as_deref()
         .and_then(|raw| serde_json::from_str(raw).ok())
         .unwrap_or_default();
     crate::services::pool_onboarding::ensure_account_in_pool(

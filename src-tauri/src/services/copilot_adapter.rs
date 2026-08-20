@@ -80,7 +80,9 @@ pub fn is_copilot_pat(account: &Account, provider: &Provider) -> bool {
     credential_type == "copilot_pat"
         || (credential_type == "api_key"
             && (provider.provider_type.eq_ignore_ascii_case("copilot")
-                || provider.provider_type.eq_ignore_ascii_case("github_copilot")
+                || provider
+                    .provider_type
+                    .eq_ignore_ascii_case("github_copilot")
                 || provider.base_url.contains("githubcopilot.com")))
 }
 
@@ -91,7 +93,9 @@ pub fn is_copilot_oauth(account: &Account, provider: &Provider) -> bool {
     credential_type == "copilot_oauth"
         || (credential_type == "oauth"
             && (provider.provider_type.eq_ignore_ascii_case("copilot")
-                || provider.provider_type.eq_ignore_ascii_case("github_copilot")
+                || provider
+                    .provider_type
+                    .eq_ignore_ascii_case("github_copilot")
                 || provider.base_url.contains("githubcopilot.com")))
 }
 
@@ -101,9 +105,7 @@ pub fn is_copilot_oauth(account: &Account, provider: &Provider) -> bool {
 ///
 /// For PAT accounts, the stored `api_key` / `access_token` is the GitHub PAT;
 /// this function ensures a fresh Copilot token is available before returning.
-pub async fn request_context(
-    account: &Account,
-) -> Result<CopilotRequestContext, String> {
+pub async fn request_context(account: &Account) -> Result<CopilotRequestContext, String> {
     let payload = payload_for_account(account)?;
     let github_token = payload
         .api_key
@@ -146,7 +148,7 @@ pub async fn exchange_github_token_for_copilot(github_token: &str) -> Result<Str
         .post(COPILOT_TOKEN_URL)
         .header("Authorization", format!("token {}", github_token))
         .header("Accept", "application/json")
-        .header("User-Agent", "PoolGate/1.0")
+        .header("User-Agent", crate::services::client_profiles::COPILOT_CHAT_USER_AGENT)
         .send()
         .await
         .map_err(|error| format!("Copilot token request failed: {}", error))?;
@@ -162,8 +164,8 @@ pub async fn exchange_github_token_for_copilot(github_token: &str) -> Result<Str
         ));
     }
 
-    let token_resp: CopilotTokenResponse =
-        serde_json::from_str(&body).map_err(|error| format!("Invalid Copilot token response: {}", error))?;
+    let token_resp: CopilotTokenResponse = serde_json::from_str(&body)
+        .map_err(|error| format!("Invalid Copilot token response: {}", error))?;
 
     if let Some(error) = token_resp.error {
         return Err(format!("Copilot token error: {}", error));
@@ -194,16 +196,12 @@ pub async fn persist_copilot_token(
     payload.api_key = Some(github_token.to_string());
     payload.access_token = Some(copilot_token.to_string());
     payload.expires_at = expires_at;
-    let credential_data =
-        serde_json::to_string(&payload).map_err(|error| error.to_string())?;
+    let credential_data = serde_json::to_string(&payload).map_err(|error| error.to_string())?;
 
     let mut updated = account;
     updated.credential_data = Some(credential_data);
     updated.api_key = github_token.to_string(); // Keep api_key column aligned.
-    state
-        .db
-        .accounts
-        .update(&state.db.conn, &updated)?;
+    state.db.accounts.update(&state.db.conn, &updated)?;
     state
         .db
         .accounts
@@ -238,29 +236,41 @@ pub fn prepare_responses_body(body: &Value) -> Result<Value, String> {
 
 // ── Header helpers ──────────────────────────────────────────────────────────
 
-pub fn apply_chat_headers(request: RequestBuilder, context: &CopilotRequestContext) -> RequestBuilder {
-    request
-        .bearer_auth(&context.copilot_token)
-        .header("Copilot-Integration-Id", COPILOT_INTEGRATION_ID)
-        .header("Content-Type", "application/json")
-        .header("User-Agent", "PoolGate/1.0")
+pub fn apply_chat_headers(
+    request: RequestBuilder,
+    context: &CopilotRequestContext,
+) -> RequestBuilder {
+    crate::services::client_profiles::apply_copilot_profile(
+        request
+            .bearer_auth(&context.copilot_token)
+            .header("Copilot-Integration-Id", COPILOT_INTEGRATION_ID)
+            .header("Content-Type", "application/json"),
+    )
 }
 
-pub fn apply_responses_headers(request: RequestBuilder, context: &CopilotRequestContext) -> RequestBuilder {
-    request
-        .bearer_auth(&context.copilot_token)
-        .header("Copilot-Integration-Id", COPILOT_INTEGRATION_ID)
-        .header("Content-Type", "application/json")
-        .header("Accept", "text/event-stream")
-        .header("User-Agent", "PoolGate/1.0")
+pub fn apply_responses_headers(
+    request: RequestBuilder,
+    context: &CopilotRequestContext,
+) -> RequestBuilder {
+    crate::services::client_profiles::apply_copilot_profile(
+        request
+            .bearer_auth(&context.copilot_token)
+            .header("Copilot-Integration-Id", COPILOT_INTEGRATION_ID)
+            .header("Content-Type", "application/json")
+            .header("Accept", "text/event-stream"),
+    )
 }
 
-pub fn apply_health_headers(request: RequestBuilder, context: &CopilotRequestContext) -> RequestBuilder {
-    request
-        .bearer_auth(&context.copilot_token)
-        .header("Copilot-Integration-Id", COPILOT_INTEGRATION_ID)
-        .header("Accept", "application/json")
-        .header("User-Agent", "PoolGate/1.0")
+pub fn apply_health_headers(
+    request: RequestBuilder,
+    context: &CopilotRequestContext,
+) -> RequestBuilder {
+    crate::services::client_profiles::apply_copilot_profile(
+        request
+            .bearer_auth(&context.copilot_token)
+            .header("Copilot-Integration-Id", COPILOT_INTEGRATION_ID)
+            .header("Accept", "application/json"),
+    )
 }
 
 // ── Endpoint selection ──────────────────────────────────────────────────────
@@ -286,7 +296,9 @@ pub fn upstream_url_for_model(model: Option<&str>) -> &'static str {
 // ── Health check ────────────────────────────────────────────────────────────
 
 /// Perform a lightweight health check against the Copilot models endpoint.
-pub async fn check_copilot_health(account: &Account) -> crate::services::health_check::HealthResult {
+pub async fn check_copilot_health(
+    account: &Account,
+) -> crate::services::health_check::HealthResult {
     use crate::services::health_check::HealthResult;
     use std::time::Instant;
 
@@ -311,7 +323,9 @@ pub async fn check_copilot_health(account: &Account) -> crate::services::health_
         Ok(Ok(resp)) => {
             let latency = start.elapsed().as_millis() as u64;
             if resp.status().is_success() {
-                HealthResult::Passed { latency_ms: latency }
+                HealthResult::Passed {
+                    latency_ms: latency,
+                }
             } else {
                 let code = resp.status().as_u16();
                 let body = resp.text().await.unwrap_or_default();
@@ -360,11 +374,17 @@ pub async fn refresh_after_unauthorized(
     let copilot_token = exchange_github_token_for_copilot(&github_token).await?;
 
     // Calculate approximate expiry.
-    let expires_at = (Utc::now() + chrono::Duration::seconds(COPILOT_TOKEN_TTL_SECS - 30))
-        .to_rfc3339();
+    let expires_at =
+        (Utc::now() + chrono::Duration::seconds(COPILOT_TOKEN_TTL_SECS - 30)).to_rfc3339();
 
-    persist_copilot_token(state, account_id, &github_token, &copilot_token, Some(expires_at))
-        .await?;
+    persist_copilot_token(
+        state,
+        account_id,
+        &github_token,
+        &copilot_token,
+        Some(expires_at),
+    )
+    .await?;
 
     // Reload the updated account.
     state
@@ -420,10 +440,7 @@ pub async fn start_device_flow() -> Result<DeviceCodeResponse, String> {
     let response = client
         .post(GITHUB_DEVICE_CODE_URL)
         .header("Accept", "application/json")
-        .form(&[
-            ("client_id", GITHUB_CLIENT_ID),
-            ("scope", GITHUB_SCOPE),
-        ])
+        .form(&[("client_id", GITHUB_CLIENT_ID), ("scope", GITHUB_SCOPE)])
         .send()
         .await
         .map_err(|error| format!("GitHub device code request failed: {}", error))?;
@@ -438,8 +455,7 @@ pub async fn start_device_flow() -> Result<DeviceCodeResponse, String> {
         ));
     }
 
-    serde_json::from_str(&body)
-        .map_err(|error| format!("Invalid device code response: {}", error))
+    serde_json::from_str(&body).map_err(|error| format!("Invalid device code response: {}", error))
 }
 
 /// Poll GitHub for the device flow token.
@@ -502,8 +518,8 @@ pub async fn complete_device_flow_login(
 ) -> Result<Account, String> {
     // Exchange GitHub token for Copilot token.
     let copilot_token = exchange_github_token_for_copilot(github_access_token).await?;
-    let expires_at = (Utc::now() + chrono::Duration::seconds(COPILOT_TOKEN_TTL_SECS - 30))
-        .to_rfc3339();
+    let expires_at =
+        (Utc::now() + chrono::Duration::seconds(COPILOT_TOKEN_TTL_SECS - 30)).to_rfc3339();
 
     // Create or reuse provider.
     let provider_id = "provider_github_copilot".to_string();
@@ -620,12 +636,14 @@ pub async fn complete_device_flow_login(
 
     // Auto-add to routing pool.
     // provider_id was moved into account.provider_id, so read it from account.
-    let provider = state.db.providers.get_by_id(
-        &state.db.conn,
-        account.provider_id.as_deref().unwrap_or(""),
-    )?
-    .ok_or_else(|| "Provider not found after creation".to_string())?;
-    let models: Vec<String> = provider.models.as_deref()
+    let provider = state
+        .db
+        .providers
+        .get_by_id(&state.db.conn, account.provider_id.as_deref().unwrap_or(""))?
+        .ok_or_else(|| "Provider not found after creation".to_string())?;
+    let models: Vec<String> = provider
+        .models
+        .as_deref()
         .and_then(|raw| serde_json::from_str(raw).ok())
         .unwrap_or_default();
     crate::services::pool_onboarding::ensure_account_in_pool(
@@ -672,17 +690,35 @@ mod tests {
     #[test]
     fn endpoint_selection_gpt5() {
         assert_eq!(upstream_url_for_model(Some("gpt-5")), COPILOT_RESPONSES_URL);
-        assert_eq!(upstream_url_for_model(Some("gpt-5-mini")), COPILOT_RESPONSES_URL);
-        assert_eq!(upstream_url_for_model(Some("codex-mini")), COPILOT_RESPONSES_URL);
-        assert_eq!(upstream_url_for_model(Some("o3-mini")), COPILOT_RESPONSES_URL);
-        assert_eq!(upstream_url_for_model(Some("o4-mini")), COPILOT_RESPONSES_URL);
+        assert_eq!(
+            upstream_url_for_model(Some("gpt-5-mini")),
+            COPILOT_RESPONSES_URL
+        );
+        assert_eq!(
+            upstream_url_for_model(Some("codex-mini")),
+            COPILOT_RESPONSES_URL
+        );
+        assert_eq!(
+            upstream_url_for_model(Some("o3-mini")),
+            COPILOT_RESPONSES_URL
+        );
+        assert_eq!(
+            upstream_url_for_model(Some("o4-mini")),
+            COPILOT_RESPONSES_URL
+        );
     }
 
     #[test]
     fn endpoint_selection_chat() {
         assert_eq!(upstream_url_for_model(Some("gpt-4o")), COPILOT_CHAT_URL);
-        assert_eq!(upstream_url_for_model(Some("gpt-4o-mini")), COPILOT_CHAT_URL);
-        assert_eq!(upstream_url_for_model(Some("claude-sonnet-4")), COPILOT_CHAT_URL);
+        assert_eq!(
+            upstream_url_for_model(Some("gpt-4o-mini")),
+            COPILOT_CHAT_URL
+        );
+        assert_eq!(
+            upstream_url_for_model(Some("claude-sonnet-4")),
+            COPILOT_CHAT_URL
+        );
         assert_eq!(upstream_url_for_model(None), COPILOT_CHAT_URL);
     }
 

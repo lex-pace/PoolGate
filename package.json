@@ -2,12 +2,24 @@
   "name": "poolgate",
   "private": true,
   "version": "0.1.0",
+  "license": "MIT",
+  "repository": "https://github.com/lex-pace/PoolGate",
+  "homepage": "https://github.com/lex-pace/PoolGate",
+  "bugs": {
+    "url": "https://github.com/lex-pace/PoolGate/issues"
+  },
+  "keywords": ["tauri", "react", "rust", "local-gateway", "llm", "token-monitor"],
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "typecheck": "tsc --noEmit",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "check:rust": "cargo check --locked --manifest-path src-tauri/Cargo.toml",
+    "test:rust": "cargo test --locked --manifest-path src-tauri/Cargo.toml",
+    "fmt:check": "cargo fmt --all --manifest-path src-tauri/Cargo.toml -- --check",
+    "lint:rust": "cargo clippy --locked --all-targets --manifest-path src-tauri/Cargo.toml -- -D warnings"
   },
   "dependencies": {
     "@tanstack/react-query": "^5",
@@ -38,5 +50,6 @@
     "@vitejs/plugin-react": "^4",
     "typescript": "^5.5",
     "vite": "^6"
-  }
+  },
+  "packageManager": "pnpm@11.21.0+sha512.521705bce689924eac72f5a3587122f362689ef6571e55ba80076fd637c11132ecffada26fad4ea79c485bfddbfd3d5a2a5b05805a77e893de71ec8a6cca3bb1"
 }

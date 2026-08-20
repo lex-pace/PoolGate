@@ -1100,7 +1100,7 @@ export default function ModelResources() {
             ? resources.filter((resource) => resource.connector?.id === connector.id).length - 1
             : 0;
           return (
-            <aside className="pg-panel p-0 overflow-hidden animate-slide-in-right fixed right-4 top-[70px] bottom-4 z-50 flex flex-col" style={{ width: 420 }}>
+            <aside className="pg-panel p-0 overflow-hidden animate-slide-in-right fixed right-4 top-[70px] bottom-4 z-50 flex flex-col" style={{ width: 420, backgroundColor: "var(--bg-surface-solid)" }}>
               <div className="px-4 py-3.5 border-b" style={{ borderColor: "var(--border-subtle)" }}>
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
@@ -1507,10 +1507,10 @@ function ImportFullScreen({ onClose }: { onClose: () => void }) {
   }, [onClose]);
 
   return (
-    <div className="fixed inset-0 z-50 flex flex-col bg-[var(--bg-canvas)] animate-fade-in">
+    <div className="pg-modal-fullscreen fixed inset-0 z-50 flex flex-col bg-[var(--bg-page-solid)] animate-fade-in">
       {/* Top navigation bar — mirrors the app toolbar for visual consistency */}
       <header
-        className="pg-toolbar shrink-0 h-[54px] flex items-center gap-3 px-4 border-b"
+        className="pg-toolbar pg-modal-toolbar shrink-0 h-[54px] flex items-center gap-3 px-4 border-b"
         style={{ borderColor: "var(--border-default)" }}
         data-tauri-drag-region
       >
@@ -1541,7 +1541,7 @@ function ImportFullScreen({ onClose }: { onClose: () => void }) {
       </header>
 
       {/* Content — ImportCenter fills the remaining space via h-full */}
-      <main className="flex-1 min-h-0 overflow-hidden">
+      <main className="flex-1 min-h-0 overflow-hidden bg-[var(--bg-page-solid)]">
         <ImportCenter onClose={onClose} />
       </main>
     </div>

@@ -14,9 +14,16 @@ use std::collections::HashMap;
 use std::sync::{Arc, LazyLock};
 use tokio::sync::Mutex;
 
-pub const CODEX_ORIGINATOR: &str = "poolgate";
-pub const CODEX_MODELS_URL: &str =
-    "https://chatgpt.com/backend-api/codex/models?client_version=1.0.0";
+pub const CODEX_ORIGINATOR: &str = crate::services::client_profiles::CODEX_ORIGINATOR;
+
+/// Codex model-list endpoint, versioned with the same client version the
+/// User-Agent presents (an inconsistent pair is a fingerprint signal).
+pub fn codex_models_url() -> String {
+    format!(
+        "https://chatgpt.com/backend-api/codex/models?client_version={}",
+        crate::services::client_profiles::CODEX_CLI_VERSION
+    )
+}
 
 static REFRESH_LOCKS: LazyLock<Mutex<HashMap<String, Arc<Mutex<()>>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
@@ -70,24 +77,26 @@ pub fn apply_responses_headers(
     request: RequestBuilder,
     context: &CodexRequestContext,
 ) -> RequestBuilder {
-    request
-        .bearer_auth(&context.access_token)
-        .header("ChatGPT-Account-Id", &context.account_id)
-        .header("originator", CODEX_ORIGINATOR)
-        .header("Accept", "text/event-stream")
-        .header("User-Agent", "PoolGate/1.0")
+    crate::services::client_profiles::apply_codex_profile(
+        request
+            .bearer_auth(&context.access_token)
+            .header("ChatGPT-Account-Id", &context.account_id)
+            .header("originator", CODEX_ORIGINATOR)
+            .header("Accept", "text/event-stream"),
+    )
 }
 
 pub fn apply_json_headers(
     request: RequestBuilder,
     context: &CodexRequestContext,
 ) -> RequestBuilder {
-    request
-        .bearer_auth(&context.access_token)
-        .header("ChatGPT-Account-Id", &context.account_id)
-        .header("originator", CODEX_ORIGINATOR)
-        .header("Accept", "application/json")
-        .header("User-Agent", "PoolGate/1.0")
+    crate::services::client_profiles::apply_codex_profile(
+        request
+            .bearer_auth(&context.access_token)
+            .header("ChatGPT-Account-Id", &context.account_id)
+            .header("originator", CODEX_ORIGINATOR)
+            .header("Accept", "application/json"),
+    )
 }
 
 /// Refresh a Codex OAuth token after a real request returned 401.

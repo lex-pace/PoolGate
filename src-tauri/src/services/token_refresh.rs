@@ -256,11 +256,7 @@ pub async fn refresh_loop(state: Arc<AppState>) {
                             // active（disabled/exhausted 不动），health 写
                             // unchecked 等待真实连通性结果。
                             db.accounts
-                                .recover_status(
-                                    &db.conn,
-                                    &account.id,
-                                    account.status.as_deref(),
-                                )
+                                .recover_status(&db.conn, &account.id, account.status.as_deref())
                                 .ok();
                         } else {
                             db.accounts
@@ -395,7 +391,12 @@ fn extract_oauth_error_code(body: &str) -> Option<String> {
                 .and_then(|item| item.as_str())
                 .map(str::to_string)
         })
-        .or_else(|| value.get("code").and_then(|item| item.as_str()).map(str::to_string))
+        .or_else(|| {
+            value
+                .get("code")
+                .and_then(|item| item.as_str())
+                .map(str::to_string)
+        })
 }
 
 /// OpenAI Codex ChatGPT subscription OAuth token refresh.
@@ -438,7 +439,8 @@ async fn refresh_codex(
         return Err(message);
     }
 
-    let json: serde_json::Value = serde_json::from_str(&body).map_err(|e| format!("Bad JSON: {}", e))?;
+    let json: serde_json::Value =
+        serde_json::from_str(&body).map_err(|e| format!("Bad JSON: {}", e))?;
 
     let new_expires_at = json["expires_in"]
         .as_i64()
@@ -541,10 +543,7 @@ async fn refresh_google(
         .or(default_client_id)
         .unwrap_or("764086051850-6qr4p6gpi6hn506pt8ejuq83di341hur.apps.googleusercontent.com");
     params.insert("client_id", client_id);
-    let client_secret = creds
-        .client_secret
-        .as_deref()
-        .or(default_client_secret);
+    let client_secret = creds.client_secret.as_deref().or(default_client_secret);
     if let Some(cs) = client_secret {
         params.insert("client_secret", cs);
     }

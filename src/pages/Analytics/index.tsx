@@ -252,7 +252,7 @@ export default function Analytics() {
                     <XAxis type="number" tick={{ fontSize: 10, fill: "var(--text-dim)" }} />
                     <YAxis type="category" dataKey="name" width={100} tick={{ fontSize: 10, fill: "var(--text-dim)" }} />
                     <Tooltip contentStyle={{ backgroundColor: "var(--bg-elevated)", border: "1px solid var(--border-default)", borderRadius: 6, fontSize: 12 }} />
-                    <Bar dataKey="count" fill="#0A84FF" radius={[0, 4, 4, 0]} name="请求数" />
+                    <Bar dataKey="count" fill="#0A84FF" radius={4} name="请求数" />
                   </BarChart>
                 </ResponsiveContainer>
               </div>
@@ -273,7 +273,7 @@ export default function Analytics() {
                     <XAxis dataKey="date" tick={{ fontSize: 10, fill: "var(--text-dim)" }} tickFormatter={(v) => v.slice(5)} />
                     <YAxis tick={{ fontSize: 10, fill: "var(--text-dim)" }} />
                     <Tooltip contentStyle={{ backgroundColor: "var(--bg-elevated)", border: "1px solid var(--border-default)", borderRadius: 6, fontSize: 12 }} />
-                    <Bar dataKey="total_cost" fill="#3B82F6" radius={[4, 4, 0, 0]} name="费用 ($)" />
+                    <Bar dataKey="total_cost" fill="#3B82F6" radius={4} name="费用 ($)" />
                   </BarChart>
                 </ResponsiveContainer>
               </div>

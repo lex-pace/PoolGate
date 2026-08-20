@@ -1,0 +1,4 @@
+[
+  {"sessionId":"c1","model":"claude-3.5-sonnet","requestTokens":5200,"responseTokens":1400,"timestamp":"2026-08-08T08:00:00.000Z"},
+  {"sessionId":"c2","model":"gpt-4o","requestTokens":3100,"responseTokens":900,"timestamp":"2026-08-08T09:00:00.000Z"}
+]

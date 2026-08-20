@@ -3,6 +3,9 @@ name = "poolgate"
 version = "0.1.0"
 description = "Local Agent Gateway — unified account pool management"
 authors = ["PoolGate Team"]
+license = "MIT"
+repository = "https://github.com/lex-pace/PoolGate"
+homepage = "https://github.com/lex-pace/PoolGate"
 edition = "2021"
 
 [lib]
@@ -13,7 +16,8 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["tray-icon", "macos-private-api"] }
+tauri = { version = "2", features = ["tray-icon", "macos-private-api", "image-png"] }
+window-vibrancy = "0.6"
 tauri-plugin-clipboard-manager = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
@@ -49,6 +53,13 @@ rand = "0.8"
 ring = "0.17"
 url = "2"
 regex = "1.13.1"
+# 局域网 IP 探测（监听地址设置：localhost / 0.0.0.0 时向同事展示可达地址）
+local-ip-address = "0.6"
+# ==== token_monitor deps ====
+# async-trait: QuotaConnector 异步 trait 方案（07 §8 已拍板，00 §9 登记）
+async-trait = "0.1"
+# notify: W2 采集框架的文件监听（05 规范；W0 预置，注册见 04 共享文件清单）
+notify = "6"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 keyring = { version = "3", default-features = false, features = ["apple-native"] }

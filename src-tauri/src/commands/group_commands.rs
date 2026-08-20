@@ -206,12 +206,10 @@ fn mask_base_url(value: &str) -> String {
 /// scheme://host resolved from a provider's base URL. Used on topology nodes
 /// so a generic template name (e.g. "自定义") stays identifiable.
 fn provider_host(base_url: &str) -> Option<String> {
-    url::Url::parse(base_url)
-        .ok()
-        .and_then(|url| {
-            url.host_str()
-                .map(|host| format!("{}://{}", url.scheme(), host))
-        })
+    url::Url::parse(base_url).ok().and_then(|url| {
+        url.host_str()
+            .map(|host| format!("{}://{}", url.scheme(), host))
+    })
 }
 
 /// Display name for the fifth-layer account node: the account name, falling
@@ -223,7 +221,12 @@ fn account_display_name(account: &crate::db::accounts::Account) -> String {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_string)
-        .or_else(|| account.email.as_deref().and_then(|email| mask_email(Some(email))))
+        .or_else(|| {
+            account
+                .email
+                .as_deref()
+                .and_then(|email| mask_email(Some(email)))
+        })
         .unwrap_or_else(|| "未命名账号".into())
 }
 
@@ -1101,7 +1104,10 @@ pub fn get_route_topology(state: State<'_, Arc<AppState>>) -> Result<RouteTopolo
             id: account.id.clone(),
             provider_id: account.provider_id.clone().unwrap_or_default(),
             name: account_display_name(account),
-            email_masked: account.email.as_deref().and_then(|email| mask_email(Some(email))),
+            email_masked: account
+                .email
+                .as_deref()
+                .and_then(|email| mask_email(Some(email))),
             status: account.status.clone().unwrap_or_else(|| "unchecked".into()),
             health_status: account.health_status.clone().unwrap_or_default(),
             routable: crate::services::credentials::is_directly_routable(account),
@@ -1127,9 +1133,7 @@ pub fn get_route_topology(state: State<'_, Arc<AppState>>) -> Result<RouteTopolo
     for pool in &topology_pools {
         for provider_id in &pool.provider_ids {
             let provider = providers_by_id.get(provider_id);
-            let supported = provider
-                .map(provider_protocols)
-                .unwrap_or_default();
+            let supported = provider.map(provider_protocols).unwrap_or_default();
             let provider_enabled = provider
                 .map(|provider| provider.enabled.unwrap_or(true))
                 .unwrap_or(true);
@@ -1150,12 +1154,9 @@ pub fn get_route_topology(state: State<'_, Arc<AppState>>) -> Result<RouteTopolo
                 if !entry.pool_ids.contains(&pool.id) {
                     entry.pool_ids.push(pool.id.clone());
                 }
-                if !edges
-                    .iter()
-                    .any(|edge: &RouteTopologyEdge| {
-                        edge.id == format!("{}-pool-{}", protocol_id, pool.id)
-                    })
-                {
+                if !edges.iter().any(|edge: &RouteTopologyEdge| {
+                    edge.id == format!("{}-pool-{}", protocol_id, pool.id)
+                }) {
                     edges.push(RouteTopologyEdge {
                         id: format!("{}-pool-{}", protocol_id, pool.id),
                         source: protocol_id.clone(),

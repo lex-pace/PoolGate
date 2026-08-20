@@ -2,9 +2,52 @@
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <link rel="icon" type="image/png" href="/poolgate-icon.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>PoolGate</title>
+    <script>
+      // 首帧前应用持久化外观：主窗口与托盘窗口（同源共享 localStorage）首次打开时
+      // 立即设置 data-theme / data-appearance / 玻璃变量，避免 React 挂载前闪默认浅色。
+      // 与 Rust settings 表双写（见 src/lib/appearance.ts）；此处只读 localStorage。
+      (function () {
+        try {
+          // 一次性把旧版默认玻璃（58% / 45px）迁移到 iOS 26 风格默认；
+          // 用户手动改过的数值保留不动。
+          var glassProfile = "pg.glassProfile";
+          if (window.localStorage.getItem(glassProfile) !== "ios26-v1") {
+            var storedOpacity = window.localStorage.getItem("pg.glassOpacity");
+            var storedBlur = window.localStorage.getItem("pg.glassBlur");
+            if (storedOpacity == null || storedOpacity === "58") window.localStorage.setItem("pg.glassOpacity", "32");
+            if (storedBlur == null || storedBlur === "45") window.localStorage.setItem("pg.glassBlur", "64");
+            if (window.localStorage.getItem("pg.glassChrome") == null) window.localStorage.setItem("pg.glassChrome", "1");
+            window.localStorage.setItem(glassProfile, "ios26-v1");
+          }
+          var theme = window.localStorage.getItem("pg.theme");
+          var resolved =
+            theme === "dark" || theme === "light"
+              ? theme
+              : window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches
+                ? "dark"
+                : "light";
+          var root = document.documentElement;
+          root.dataset.theme = resolved;
+          root.dataset.appearance = resolved;
+          root.style.colorScheme = resolved;
+          var opacity = Number(window.localStorage.getItem("pg.glassOpacity"));
+          var blur = Number(window.localStorage.getItem("pg.glassBlur"));
+          if (Number.isFinite(opacity)) {
+            root.style.setProperty("--tg-glass-alpha", (Math.min(100, Math.max(0, opacity)) / 100).toFixed(2));
+          }
+          if (Number.isFinite(blur)) {
+            root.style.setProperty("--tg-glass-blur", Math.min(100, Math.max(0, blur)) + "px");
+          }
+          // 侧栏/工具栏跟随开关：默认关闭（固定默认外观），开启后随滑块联动
+          root.dataset.glassChrome = window.localStorage.getItem("pg.glassChrome") === "1" ? "on" : "off";
+        } catch (e) {
+          // 隐私模式/无 storage：保持默认外观
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

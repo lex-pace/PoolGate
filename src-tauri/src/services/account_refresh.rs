@@ -209,10 +209,25 @@ async fn refresh_account_quota_inner(
         || provider_key == "codex"
         || account.source_format.as_deref() == Some("codex_auth");
 
+    // DeepSeek 网关账号：官方 /user/balance 余额 → account_usage（额度视图展示真实余额）。
+    let is_deepseek = crate::token_monitor::quota::deepseek::is_deepseek(
+        account.provider_id.as_deref(),
+        provider.as_ref().map(|p| p.name.as_str()),
+        provider.as_ref().map(|p| p.base_url.as_str()),
+    );
+    if is_deepseek {
+        return refresh_deepseek_quota(state, account_id, &account).await;
+    }
+
     // Google Antigravity quota comes from the Cloud Code `fetchAvailableModels`
     // response (`models[].quotaInfo`) + `loadCodeAssist` tier.
     let is_antigravity = provider_key == "antigravity"
-        || crate::services::antigravity_adapter::is_antigravity_account(&account, provider.as_ref().ok_or_else(|| "上游连接器不存在".to_string())?);
+        || crate::services::antigravity_adapter::is_antigravity_account(
+            &account,
+            provider
+                .as_ref()
+                .ok_or_else(|| "上游连接器不存在".to_string())?,
+        );
     if is_antigravity {
         return refresh_antigravity_quota(state, account_id, &account).await;
     }
@@ -248,6 +263,42 @@ async fn refresh_account_quota_inner(
     }
 }
 
+/// DeepSeek 网关账号余额（GET /user/balance）→ 写入 account_usage.quota_windows，
+/// 由 `list_quota_accounts` 读取后以 prepaid_balance 窗口展示真实余额。
+async fn refresh_deepseek_quota(
+    state: &Arc<AppState>,
+    account_id: &str,
+    account: &Account,
+) -> Result<(Option<String>, Vec<QuotaWindow>), String> {
+    let api_key = authorization_secret(account)?;
+    let connector = crate::token_monitor::quota::deepseek::DeepSeekConnector::default();
+    let windows = connector
+        .fetch_quota_inner(&api_key)
+        .await
+        .map_err(|error| error.to_string())?;
+    if windows.is_empty() {
+        let error = "DeepSeek 余额接口未返回数据".to_string();
+        state.db.accounts.update_usage_error(
+            &state.db.conn,
+            account_id,
+            "deepseek",
+            &error,
+        )?;
+        return Err(error);
+    }
+    let encoded = serde_json::to_string(&windows).map_err(|e| e.to_string())?;
+    state.db.accounts.update_usage(
+        &state.db.conn,
+        account_id,
+        "deepseek",
+        None,
+        &encoded,
+        None,
+    )?;
+    // 无百分比窗口（余额是金额）；前端 RefreshResult 的 quota_windows 留空即可。
+    Ok((None, vec![]))
+}
+
 pub async fn batch_refresh_quotas(
     state: Arc<AppState>,
     account_ids: Vec<String>,
@@ -280,11 +331,9 @@ async fn refresh_antigravity_quota(
         .and_then(|v| v.as_str())
         .map(String::from);
 
-    let (tier, entries) = crate::services::antigravity_adapter::fetch_quota(
-        &access_token,
-        project_id.as_deref(),
-    )
-    .await?;
+    let (tier, entries) =
+        crate::services::antigravity_adapter::fetch_quota(&access_token, project_id.as_deref())
+            .await?;
     if entries.is_empty() {
         let error = "fetchAvailableModels 未返回额度信息".to_string();
         state
@@ -314,7 +363,11 @@ async fn refresh_antigravity_quota(
             reset_after_seconds: reset_after,
         });
     }
-    windows.sort_by(|a, b| a.remaining_percent.partial_cmp(&b.remaining_percent).unwrap_or(std::cmp::Ordering::Equal));
+    windows.sort_by(|a, b| {
+        a.remaining_percent
+            .partial_cmp(&b.remaining_percent)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     let encoded = serde_json::to_string(&windows).map_err(|e| e.to_string())?;
     state.db.accounts.update_usage(

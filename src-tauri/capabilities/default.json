@@ -35,6 +35,7 @@
     "notification:allow-request-permission",
     "process:default",
     "process:allow-exit",
+    "shell:allow-open",
     "autostart:default",
     "autostart:allow-enable",
     "autostart:allow-disable",
