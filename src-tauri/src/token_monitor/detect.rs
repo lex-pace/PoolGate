@@ -225,6 +225,23 @@ pub(crate) fn enable_tool_monitoring(
 // 内部辅助
 // ---------------------------------------------------------------------------
 
+/// 判断某个内置工具当前是否真实安装在本机。
+/// `data_found` 来自 adapter.discover()；即使没有历史数据，只要 CLI 或默认数据目录存在，
+/// 仍应出现在「工具监控」页面，显示灰点「监控中」。
+pub(crate) fn tool_is_installed(tool_id: &str, data_found: bool) -> bool {
+    if data_found || cli_hint(tool_id).is_some() {
+        return true;
+    }
+    if tool_id == "tokscale_aggregate" {
+        return tokscale::locate_cached().is_some();
+    }
+    COVERED_NO_ADAPTER
+        .iter()
+        .find(|(tid, ..)| *tid == tool_id)
+        .map(|(_, _, _, clis, dirs)| find_cli(clis).is_some() || !find_home_dirs(dirs).is_empty())
+        .unwrap_or(false)
+}
+
 /// tool_definition 中 enabled=1 的 tool_id 集合。
 fn enabled_tool_ids(state: &Arc<AppState>) -> HashSet<String> {
     let Ok(conn) = state.db.conn.lock() else {

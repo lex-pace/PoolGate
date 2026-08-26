@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
@@ -11,10 +11,6 @@ import { addCustomApp, detectLocalAgents, enableToolMonitoring, removeCustomApp,
 import type { CollectorStatus } from "@/lib/token-monitor-commands";
 
 // ── 采集状态 → 圆点/短标签 ──
-const STATUS_TONE: Record<CollectorStatus, "on" | "warn" | "err" | ""> = {
-  active: "on", idle: "", waiting: "warn", permission: "warn",
-  path_missing: "warn", format_changed: "warn", partial: "warn", error: "err",
-};
 const STATUS_LABEL: Record<CollectorStatus, string> = {
   active: "监控中", idle: "空闲", waiting: "等待中", permission: "需授权",
   path_missing: "路径缺失", format_changed: "格式变化", partial: "部分异常", error: "异常",
@@ -132,13 +128,14 @@ function ToolCard({
       ? STATUS_LABEL[c.status] ?? c.status
       : "监控中"
     : "已关闭";
-  const tone = c.enabled ? STATUS_TONE[c.status] ?? "" : "";
+  // 有新采集/数据变化时显示绿点；没有变化、空闲或已关闭时显示灰点。
+  const tone = c.enabled && c.status === "active" ? "on" : "";
   return (
     <div className={`pg-tool-card ${c.enabled ? "" : "is-off"}`}>
       <div
         className="pg-tool-logo-box"
         onClick={() => setForced((v) => !v)}
-        title="点击 Logo 重扫该工具"
+        title="悬停后可刷新当前应用；点击开关可关闭监控"
         aria-label={`重扫 ${c.display_name}`}
       >
         <ToolLogo toolId={c.tool_id} displayName={c.display_name} size={38} />
@@ -272,8 +269,14 @@ export default function Tools({ range: _range }: { range: "day" }) {
   const [adding, setAdding] = useState(false);
 
   const list = collectors ?? [];
-  const custom = list.filter((c) => c.tool_id.startsWith("custom:"));
-  const builtin = list.filter((c) => !c.tool_id.startsWith("custom:"));
+  // 内置工具只展示本机实际发现数据源的应用；后端状态列表已过滤未安装项。
+  // 自定义应用不受此过滤影响，仍按用户主动配置展示。
+  const installedBuiltin = useMemo(
+    () => list.filter((c) => c.installed || c.tool_id.startsWith("custom:")),
+    [list],
+  );
+  const custom = installedBuiltin.filter((c) => c.tool_id.startsWith("custom:"));
+  const builtin = installedBuiltin.filter((c) => !c.tool_id.startsWith("custom:"));
   const enabledCount = list.filter((c) => c.enabled).length;
 
   // 一键扫描：检测本机已安装的 Agent 工具，预选「有数据且可添加」的工具
@@ -347,7 +350,7 @@ export default function Tools({ range: _range }: { range: "day" }) {
     }
   };
 
-  // 勾选 = 加入/移出 Token 监控
+  // 勾选 = 加入/移出 Token 监控；后端统计查询会立即排除关闭应用的历史数据。
   const handleToggle = async (toolId: string, enabled: boolean) => {
     setBusyToggle(toolId);
     try {
@@ -420,7 +423,7 @@ export default function Tools({ range: _range }: { range: "day" }) {
           <p className="text-xs text-[var(--text-dim)] py-3">未检测到已知 Agent 工具。</p>
         ) : (
           <div className="flex flex-col gap-1.5">
-            {detected.map((agent) => (
+            {detected.filter((agent) => agent.installed || agent.data_found).map((agent) => (
               <DetectRow
                 key={agent.tool_id}
                 agent={agent}

@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PoolGate 升级清单 — 四项目借鉴路线图</title>
+<style>
+  :root {
+    --bg: #0d1117; --surface: #161b22; --border: #30363d;
+    --text: #e6edf3; --text-dim: #8b949e; --text-bright: #f0f6fc;
+    --cyan: #00d4aa; --cyan-dim: #00d4aa33; --cyan-glow: #00d4aa55;
+    --red: #f85149; --orange: #d29922; --green: #3fb950;
+    --blue: #58a6ff; --purple: #bc8cff;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family: -apple-system, 'Segoe UI', 'Noto Sans SC', sans-serif;
+    background: var(--bg); color: var(--text); line-height: 1.6; }
+
+  /* ── header ── */
+  .header { background: linear-gradient(135deg, #0d1117 0%, #0a1628 100%);
+    border-bottom: 1px solid var(--border); padding: 32px 0 24px; text-align: center; }
+  .header h1 { font-size: 28px; color: var(--text-bright); margin-bottom: 6px; }
+  .header h1 span { color: var(--cyan); }
+  .header p { color: var(--text-dim); font-size: 14px; max-width: 640px; margin: 0 auto; }
+
+  /* ── progress ── */
+  .progress-wrap { max-width: 900px; margin: 20px auto 0; padding: 0 20px; }
+  .progress-bar-bg { height: 8px; background: var(--border); border-radius: 4px; overflow: hidden; }
+  .progress-bar-fill { height: 100%; background: linear-gradient(90deg, var(--cyan), var(--green));
+    border-radius: 4px; transition: width .4s ease; width: 0%; }
+  .progress-text { font-size: 13px; color: var(--text-dim); margin-top: 6px; text-align: center; }
+
+  /* ── toolbar ── */
+  .toolbar { max-width: 900px; margin: 24px auto 0; padding: 0 20px;
+    display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .filter-group { display: flex; flex-wrap: wrap; gap: 6px; }
+  .filter-btn { padding: 4px 12px; border-radius: 16px; border: 1px solid var(--border);
+    background: transparent; color: var(--text-dim); font-size: 12px; cursor: pointer;
+    transition: all .2s; }
+  .filter-btn:hover { border-color: var(--cyan); color: var(--text); }
+  .filter-btn.active { background: var(--cyan-dim); border-color: var(--cyan); color: var(--cyan); }
+  .spacer { flex: 1; }
+  .export-btn { padding: 5px 14px; border-radius: 6px; border: 1px solid var(--cyan);
+    background: transparent; color: var(--cyan); font-size: 12px; cursor: pointer; transition: all .2s; }
+  .export-btn:hover { background: var(--cyan-dim); }
+
+  /* ── section ── */
+  .container { max-width: 900px; margin: 0 auto; padding: 0 20px 60px; }
+  .section { margin-top: 28px; }
+  .section-title { font-size: 15px; font-weight: 600; padding: 10px 14px;
+    border-radius: 8px; margin-bottom: 12px; display: flex; align-items: center; gap: 8px; }
+  .section-title .badge { font-size: 11px; padding: 2px 8px; border-radius: 10px; font-weight: 500; }
+  .section-title .count { font-size: 12px; color: var(--text-dim); margin-left: auto; }
+  .p0-title { background: linear-gradient(90deg, #f8514915, transparent); }
+  .p0-title .badge { background: var(--red); color: #fff; }
+  .p1-title { background: linear-gradient(90deg, #d2992215, transparent); }
+  .p1-title .badge { background: var(--orange); color: #000; }
+  .p2-title { background: linear-gradient(90deg, #58a6ff10, transparent); }
+  .p2-title .badge { background: var(--blue); color: #000; }
+
+  /* ── card ── */
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+    padding: 16px 18px; margin-bottom: 10px; transition: all .25s; cursor: default; }
+  .card:hover { border-color: var(--cyan-glow); box-shadow: 0 0 12px #00d4aa10; }
+  .card.done { opacity: .55; }
+  .card.done .card-title { text-decoration: line-through; color: var(--text-dim); }
+  .card.hidden { display: none; }
+  .card-top { display: flex; align-items: flex-start; gap: 12px; }
+  .card-top input[type=checkbox] { margin-top: 4px; width: 18px; height: 18px;
+    accent-color: var(--cyan); flex-shrink: 0; cursor: pointer; }
+  .card-body { flex: 1; }
+  .card-title { font-size: 15px; font-weight: 600; color: var(--text-bright); }
+  .card-desc { font-size: 13px; color: var(--text-dim); margin-top: 4px; }
+  .card-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .tag { font-size: 11px; padding: 2px 8px; border-radius: 10px; border: 1px solid var(--border); color: var(--text-dim); }
+  .tag.src-sub2api { border-color: #bc8cff44; color: var(--purple); }
+  .tag.src-newapi { border-color: #58a6ff44; color: var(--blue); }
+  .tag.src-ccswitch { border-color: #3fb95044; color: var(--green); }
+  .tag.src-cockpit { border-color: #d2992244; color: var(--orange); }
+  .tag.src-security { border-color: #f8514944; color: var(--red); }
+  .tag.mod { border-color: var(--cyan-dim); color: var(--cyan); }
+  .warn-badge { display: inline-flex; align-items: center; gap: 4px; font-size: 11px;
+    padding: 2px 8px; border-radius: 10px; background: #f8514922; color: var(--red);
+    border: 1px solid #f8514944; margin-left: 6px; }
+
+  /* ── footer ── */
+  .footer { max-width: 900px; margin: 0 auto; padding: 0 20px 40px;
+    font-size: 12px; color: var(--text-dim); border-top: 1px solid var(--border); padding-top: 20px; }
+  .footer a { color: var(--cyan); text-decoration: none; }
+
+  /* ── toast ── */
+  .toast { position: fixed; bottom: 24px; right: 24px; background: var(--surface);
+    border: 1px solid var(--cyan); color: var(--cyan); padding: 10px 18px;
+    border-radius: 8px; font-size: 13px; opacity: 0; transform: translateY(10px);
+    transition: all .3s; pointer-events: none; z-index: 999; }
+  .toast.show { opacity: 1; transform: translateY(0); }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>🚀 PoolGate <span>升级清单</span></h1>
+  <p>基于 sub2api · new-api · cc-switch · cockpit-tools 四个开源项目的借鉴分析，整理的 P0/P1/P2 功能路线图与账号池安全加固项</p>
+  <div class="progress-wrap">
+    <div class="progress-bar-bg"><div class="progress-bar-fill" id="progressFill"></div></div>
+    <div class="progress-text" id="progressText">0 / 0 已完成</div>
+  </div>
+</div>
+
+<div class="toolbar" id="toolbar">
+  <div class="filter-group" id="priorityFilters">
+    <button class="filter-btn active" data-filter="priority" data-value="all">全部</button>
+    <button class="filter-btn" data-filter="priority" data-value="P0">🔴 P0 迫切</button>
+    <button class="filter-btn" data-filter="priority" data-value="P1">🟡 P1 完善</button>
+    <button class="filter-btn" data-filter="priority" data-value="P2">🔵 P2 远期</button>
+  </div>
+  <div style="width:1px;height:20px;background:var(--border);margin:0 6px"></div>
+  <div class="filter-group" id="sourceFilters">
+    <button class="filter-btn active" data-filter="source" data-value="all">全部来源</button>
+    <button class="filter-btn" data-filter="source" data-value="sub2api">sub2api</button>
+    <button class="filter-btn" data-filter="source" data-value="newapi">new-api</button>
+    <button class="filter-btn" data-filter="source" data-value="ccswitch">cc-switch</button>
+    <button class="filter-btn" data-filter="source" data-value="cockpit">cockpit-tools</button>
+    <button class="filter-btn" data-filter="source" data-value="security">🔒 安全</button>
+  </div>
+  <div class="spacer"></div>
+  <button class="export-btn" onclick="exportMarkdown()">📋 导出 Markdown</button>
+</div>
+
+<div class="container" id="checklist"></div>
+
+<div class="footer">
+  <p><strong>⚠️ 许可证提醒</strong>：cockpit-tools 采用 CC BY-NC-SA 4.0（非商业 + 同源传染），不可将代码移植进 MIT 协议的 PoolGate，仅借鉴设计思路；cc-switch 为 MIT，可自由借鉴；sub2api 为 LGPL-3.0，建议只参考逻辑独立实现。</p>
+  <p style="margin-top:8px"><strong>⚖️ ToS 声明</strong>：订阅账号走网关本身可能违反上游厂商服务条款，以下防封措施只能降低概率，无法保证零风险。</p>
+  <p style="margin-top:12px;color:var(--text-dim)">PoolGate 升级清单 · 生成于 2026-08-25 · 基于 sub2api / new-api / cc-switch / cockpit-tools 分析</p>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const DATA = [
+  // ═══ P0 ═══
+  { id:1, priority:"P0", title:"额度感知路由",
+    desc:"将 Token Monitor 的 5h 滚动窗口 / 周窗口快照接入路由决策：优先选剩余额度多的账号；rate_limited 账号停驻到窗口重置预计时间，不再 60s 盲试——频繁撞 429 本身就是最强的风控信号。",
+    sources:["security"], mods:["proxy/router","token_monitor/quota","db/accounts"],
+    benefit:"直接决定订阅账号存活率，429 是封号前兆" },
+  { id:2, priority:"P0", title:"Plan 权重",
+    desc:"识别 Plus/Pro/Team 套餐类型并配置差异化权重（Pro 承担更多流量、Plus 兜底），套餐权重联动路由候选排序。数据库加 plan_tier 字段。",
+    sources:["cockpit"], mods:["db/accounts","proxy/router"],
+    benefit:"不同套餐耐压不同，合理分流延长账号寿命" },
+  { id:3, priority:"P0", title:"模型映射/重定向",
+    desc:"支持别名到实际模型的映射规则（精确 / 通配符），路由层自动重写 model 字段。如客户端请求 gpt-5-high → 路由到池内实际 gpt-5 模型。",
+    sources:["newapi"], mods:["proxy/router","db/groups"],
+    benefit:"Agent 用户最高频需求，消除「模型不存在」报错" },
+  { id:4, priority:"P0", title:"Reasoning Effort 后缀",
+    desc:"-thinking/-high/-low 后缀自动转为 Claude thinking 参数或 Gemini budget。配合模型映射叠加使用。",
+    sources:["newapi"], mods:["proxy/protocol"],
+    benefit:"一步到位的推理模式切换，提升 Agent 效果" },
+  { id:5, priority:"P0", title:"工具配置一键接管 + 回退",
+    desc:"「接管此工具」按钮：直接把 BASE_URL 写入 Claude Code settings.json / Codex config.toml / Gemini CLI 等配置文件，支持一键回退官方直连。托盘菜单加「工具接入状态」子菜单。",
+    sources:["ccswitch"], mods:["services/tool接管","commands","tray"],
+    benefit:"桌面网关独门优势——服务器中转站做不到" },
+  { id:6, priority:"P0", title:"供应商预设库",
+    desc:"内置常见云厂商 / 中转站 / 官方 API 的 Base URL 模板，粘贴 Key 即完成导入。配合三步向导，降低添加服务商门槛。",
+    sources:["ccswitch"], mods:["services/import","pages/Wizard"],
+    benefit:"从 5 步填表简化为 1 步粘贴" ],
+  { id:7, priority:"P0", title:"加权随机路由策略",
+    desc:"在现有轮询/最少使用/优先级/随机/成本优先基础上，增加 weighted-random 策略，权重字段已在 group_accounts 库表中。",
+    sources:["newapi"], mods:["proxy/router"],
+    benefit:"主力号 80% + 备用号 20% 等混池意图的表达" ],
+  { id:8, priority:"P0", title:"网关成本核算",
+    desc:"复用 Token Monitor 的 pricing.rs 价格表，填入 request_logs.cost 字段。Analytics 页直接展示成本曲线——「这个月 Agent 烧了多少钱」。",
+    sources:["newapi","ccswitch"], mods:["proxy/server","db/logs","pages/Analytics"],
+    benefit:"独有闭环：网关成本 + 本地工具成本一张图" ],
+  { id:9, priority:"P0", title:"局域网订阅账号仅限本机路由（安全提级）",
+    desc:"路由层按请求来源区分本机/远端，OAuth 订阅类账号只允许本机请求路由，防止同事通过局域网消耗个人订阅额度。已在下一步任务列表中，建议提级为 P0。",
+    sources:["security"], mods:["proxy/router","proxy/auth"],
+    benefit:"共享场景最大的额度泄露面" ],
+
+  // ═══ P1 ═══
+  { id:10, priority:"P1", title:"账号健康分 + 池体检页",
+    desc:"综合 429 频率、错误率、封控信号、刷新失败次数算出每账号健康分；提供「池体检」入口——批量检查、发现不健康账号、给出清理/冷却建议。与现有 alerts 表天然衔接。",
+    sources:["security","cockpit"], mods:["db/accounts","pages/AccountPool"],
+    benefit:"从被动告警升级为主动巡检" ],
+  { id:11, priority:"P1", title:"设备指纹持久化收敛",
+    desc:"每账号首次登录时生成的稳定标识集合（originator、session 元数据、UA 等）持久化到账号记录，之后所有请求复用，绝不每次随机。",
+    sources:["sub2api"], mods:["services/client_profiles","db/accounts"],
+    benefit:"消除设备指纹漂移——这是自动化检测的核心信号" ],
+  { id:12, priority:"P1", title:"出站代理下沉到账号级",
+    desc:"在 providers.proxy_url 之外，给 accounts 表加可选 proxy_url，适配 reqwest 各处已有的 proxy 注入点。多账号同 IP 是最大关联风险。",
+    sources:["sub2api"], mods:["db/accounts","proxy/protocol"],
+    benefit:"多出口降低关联风控概率" ],
+  { id:13, priority:"P1", title:"账号分组隔离（官方源 vs 中转源）",
+    desc:"添加标签/分组层（如「官方源」「中转源」「Antigravity」），用于批量启停、风控分级、按组排除故障转移候选。sub2api 警告 Claude 官方与 Antigravity 不能混用上下文。",
+    sources:["sub2api"], mods:["db/groups","proxy/router"],
+    benefit:"避免跨源上下文污染" ],
+  { id:14, priority:"P1", title:"端点测速 + 一键连通性测试",
+    desc:"对候选账号发最小请求测 TTFB/延迟，导入后立即可视化验证。基于健康检查基础设施扩展。",
+    sources:["ccswitch"], mods:["services/health_check","commands"],
+    benefit:"导入即验证，不用等首次真实请求才发现问题" ],
+  { id:15, priority:"P1", title:"配额监控扩平台",
+    desc:"逐步补齐 Copilot（Inline/Chat 分项）、Claude（周窗口）、Grok billing 等接口，统一展示在 Token Monitor「额度」页。目前主要覆盖 Codex 5h 窗口。",
+    sources:["cockpit"], mods:["token_monitor/quota","pages/TokenMonitor"],
+    benefit:"全平台额度一目了然" ],
+  { id:16, priority:"P1", title:"Embeddings / Rerank 透传",
+    desc:"新增 /v1/embeddings 和 /rerank 端点纯透传+按池路由。不做协议转换，RAG 场景刚需。",
+    sources:["newapi"], mods:["proxy/server","proxy/protocol"],
+    benefit:"覆盖 RAG 开发者流量" ],
+  { id:17, priority:"P1", title:"完整备份/迁移 + 自动备份轮换",
+    desc:"一键导出/导入 gateway.db + credentials.vault.json，含密钥串迁移提示。保留最近 N 份自动备份。解决换机痛点。",
+    sources:["sub2api","ccswitch"], mods:["commands","services/export"],
+    benefit:"README 里的手工迁移步骤变成一键操作" ],
+  { id:18, priority:"P1", title:"Deep Link 导入",
+    desc:"通过 poolgate:// URL 一键导入账号配置/密钥/池配置，方便团队内分发「接入包」。Tauri 有 deep-link 插件。",
+    sources:["ccswitch"], mods:["commands/deeplink","services/import"],
+    benefit:"配置分享一步到位" ],
+
+  // ═══ P2 ═══
+  { id:19, priority:"P2", title:"SSRF 防护 / 上游 URL 白名单",
+    desc:"局域网共享模式下：禁止 Base URL 指向私网/回环地址、强制 HTTPS 可选项。sub2api 的 url_allowlist 设计可直接参考思路。",
+    sources:["sub2api"], mods:["proxy/auth","services/import"],
+    benefit:"防止 Base URL 被指向内网" ],
+  { id:20, priority:"P2", title:"缓存命中率面板",
+    desc:"迁移 021 已拆 cache_read/write，Analytics 页展示缓存命中率趋势——几乎零后端成本。",
+    sources:["newapi"], mods:["pages/Analytics","db/logs"],
+    benefit:"让用户看到缓存节省了多少 token" ],
+  { id:21, priority:"P2", title:"更新检查",
+    desc:"桌面端「检测新版本」提示，基于 Tauri updater 插件。不做自动升级，只做提醒。",
+    sources:["sub2api"], mods:["services/updater"],
+    benefit:"用户不用手动关注 GitHub Releases" ],
+  { id:22, priority:"P2", title:"MCP / Skills 统一管理",
+    desc:"跨工具双向同步 MCP 配置。体量大、偏离网关主线，建议作为独立插件页或远期项。",
+    sources:["ccswitch"], mods:["pages/MCP","services/mcp_sync"],
+    benefit:"从网关升级为本地 AI 工作台控制中心" ],
+  { id:23, priority:"P2", title:"Agent Identity 动态签名（研究项）",
+    desc:"研究 openai/codex 的 Ed25519 agent 注册协议，按账号生成/导入 agent 身份并签名请求。收益最大但工程量和逆向维护成本也最大。",
+    sources:["sub2api"], mods:["proxy/codex_adapter"],
+    benefit:"请求来自合法注册的 agent runtime，指纹伪装最深" ],
+  { id:24, priority:"P2", title:"唤醒任务",
+    desc:"定时轻量请求提前触发配额重置周期。有明确 ToS 风险，如做必须默认关闭并强提示。",
+    sources:["cockpit"], mods:["token_monitor/quota"],
+    warn:"⚠️ ToS 风险：明确违反多数厂商条款，建议默认关闭",
+    benefit:"理论上限额恢复更快，但风险收益比不佳" },
+];
+
+// ── state ──
+const STORAGE_KEY = "pg_checklist_done";
+let doneSet = new Set(JSON.parse(localStorage.getItem(STORAGE_KEY)||"[]"));
+let activePriority = "all", activeSource = "all";
+
+function save() { localStorage.setItem(STORAGE_KEY, JSON.stringify([...doneSet])); }
+
+function updateProgress() {
+  const total = DATA.length, done = [...doneSet].length;
+  const pct = total ? Math.round(done/total*100) : 0;
+  document.getElementById("progressFill").style.width = pct+"%";
+  document.getElementById("progressText").textContent = `${done} / ${total} 已完成 (${pct}%)`;
+}
+
+function matchesFilter(item) {
+  if (activePriority!=="all" && item.priority!==activePriority) return false;
+  if (activeSource!=="all") {
+    if (activeSource==="security") { if (!item.sources.includes("security")) return false; }
+    else if (!item.sources.includes(activeSource)) return false;
+  }
+  return true;
+}
+
+function render() {
+  const container = document.getElementById("checklist");
+  const groups = [{p:"P0",title:"P0 · 迫切",cls:"p0-title"},{p:"P1",title:"P1 · 完善",cls:"p1-title"},{p:"P2",title:"P2 · 远期",cls:"p2-title"}];
+  let html = "";
+  for (const g of groups) {
+    const items = DATA.filter(d => d.priority===g.p && matchesFilter(d));
+    if (!items.length) continue;
+    html += `<div class="section"><div class="section-title ${g.cls}"><span class="badge">${g.p}</span> ${g.title.replace(g.p+' · ','')}<span class="count">${items.filter(i=>doneSet.has(i.id)).length} / ${items.length}</span></div>`;
+    for (const item of items) {
+      const isDone = doneSet.has(item.id);
+      html += `<div class="card ${isDone?'done':''}" data-id="${item.id}">
+        <div class="card-top">
+          <input type="checkbox" ${isDone?'checked':''} onchange="toggle(${item.id},this.checked)">
+          <div class="card-body">
+            <div class="card-title">${item.title}${item.warn?`<span class="warn-badge">${item.warn}</span>`:''}</div>
+            <div class="card-desc">${item.desc}</div>
+            <div class="card-tags">
+              ${item.sources.map(s => {
+                if (s==="security") return `<span class="tag src-security">🔒 安全专项</span>`;
+                if (s==="sub2api") return `<span class="tag src-sub2api">sub2api</span>`;
+                if (s==="newapi") return `<span class="tag src-newapi">new-api</span>`;
+                if (s==="ccswitch") return `<span class="tag src-ccswitch">cc-switch</span>`;
+                if (s==="cockpit") return `<span class="tag src-cockpit">cockpit-tools</span>`;
+                return '';
+              }).join('')}
+              ${item.mods.map(m=>`<span class="tag mod">${m}</span>`).join('')}
+            </div>
+            <div class="card-desc" style="margin-top:6px;color:var(--cyan);font-size:12px">💡 ${item.benefit}</div>
+          </div>
+        </div>
+      </div>`;
+    }
+    html += `</div>`;
+  }
+  if (!html) html = `<div style="text-align:center;padding:60px 0;color:var(--text-dim)">没有匹配的条目</div>`;
+  container.innerHTML = html;
+}
+
+function toggle(id, checked) {
+  if (checked) doneSet.add(id); else doneSet.delete(id);
+  save(); updateProgress(); render();
+}
+
+// ── filters ──
+document.getElementById("toolbar").addEventListener("click", e => {
+  const btn = e.target.closest(".filter-btn");
+  if (!btn) return;
+  const filter = btn.dataset.filter, value = btn.dataset.value;
+  const group = filter==="priority" ? "priorityFilters" : "sourceFilters";
+  document.getElementById(group).querySelectorAll(".filter-btn").forEach(b=>b.classList.remove("active"));
+  btn.classList.add("active");
+  if (filter==="priority") activePriority=value; else activeSource=value;
+  render();
+});
+
+// ── export ──
+function exportMarkdown() {
+  let md = "# PoolGate 升级清单\n\n";
+  md += `> 生成于 ${new Date().toLocaleDateString('zh-CN')} · 完成进度 ${[...doneSet].length}/${DATA.length}\n\n`;
+  const groups = [{p:"P0",t:"P0 · 迫切"},{p:"P1",t:"P1 · 完善"},{p:"P2",t:"P2 · 远期"}];
+  for (const g of groups) {
+    const items = DATA.filter(d=>d.priority===g.p);
+    md += `## ${g.t}\n\n`;
+    for (const item of items) {
+      const check = doneSet.has(item.id) ? "x" : " ";
+      md += `- [${check}] **${item.title}**`;
+      if (item.warn) md += ` ${item.warn}`;
+      md += `\n  ${item.desc}\n  来源: ${item.sources.map(s=>s==="security"?"安全专项":s).join(", ")} | 模块: ${item.mods.join(", ")}\n\n`;
+    }
+  }
+  md += "---\n\n⚠️ 许可证: cockpit-tools (CC BY-NC-SA 4.0) 仅借鉴思路不可移植代码；cc-switch (MIT) 可自由借鉴；sub2api (LGPL-3.0) 建议独立实现。\n";
+  md += "⚖️ ToS: 订阅账号走网关本身可能违反上游条款，防封措施只能降低概率。\n";
+  navigator.clipboard.writeText(md).then(()=>showToast("✅ 已复制到剪贴板")).catch(()=>showToast("❌ 复制失败，请手动复制"));
+}
+
+function showToast(msg) {
+  const t = document.getElementById("toast");
+  t.textContent = msg; t.classList.add("show");
+  setTimeout(()=>t.classList.remove("show"), 2500);
+}
+
+render(); updateProgress();
+</script>
+</body>
+</html>

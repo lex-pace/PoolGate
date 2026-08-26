@@ -52,7 +52,7 @@ export interface SessionEventRow {
   cost_amount?: number | null;
 }
 export interface ToolCollectorState {
-  tool_id: string; display_name: string; enabled: boolean; support_level: SupportLevel;
+  tool_id: string; display_name: string; installed: boolean; enabled: boolean; support_level: SupportLevel;
   status: CollectorStatus; last_collected_at?: string; error?: string; paths: string[];
 }
 export interface QuotaWindowView {

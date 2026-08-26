@@ -240,11 +240,14 @@ export default function TrayCard() {
           <div className="pg-tg-title-group">
             <div className="pg-tg-title-row">
               <h1>PoolGate</h1>
-              <span className={`pg-tg-online ${snapshot.gateway_running ? "on" : ""}`}>
+              <span
+                className={`pg-tg-online ${snapshot.gateway_running ? "on" : ""}`}
+                title={snapshot.gateway_running ? "网关在线" : "网关离线"}
+              >
                 <i />{snapshot.gateway_running ? "在线" : "离线"}
               </span>
             </div>
-            <span className="pg-tg-subtitle">本地 Agent 网关</span>
+
           </div>
         </div>
         <div className="pg-tg-segmented" role="tablist">

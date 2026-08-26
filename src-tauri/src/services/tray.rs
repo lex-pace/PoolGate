@@ -168,21 +168,12 @@ pub fn setup_tray<R: Runtime>(app: &mut App<R>) -> Result<(), Box<dyn std::error
     // 原生右键菜单（启动/停止网关、路由池、Tokens 统计、退出等），按启动时状态构建；
     // 之后由 refresh_tray_menu 每 10s 重建以保持实时。左键不弹菜单，交给点击事件。
     let menu = build_tray_menu(&app.handle().clone(), TokenRange::Today)?;
-    // 初始图标：macOS 用深色单色云朵-P（`LOGO_COLOR`）剪影 + 状态点（不启用
-    // NSImage 模板模式，否则彩色状态点会被染成黑白）；其他平台用应用图标。
-    // 启动后 apply_menu_bar 会按实时状态持续刷新图标与标题。
+    // 初始图标与运行时保持一致：macOS 用 Template 蒙版 Logo（AppKit 按菜单
+    // 栏实际背景自动黑/白），彩色状态点由富文本标题承载（见 menu_bar.rs）。
     #[cfg(target_os = "macos")]
     let initial_icon = {
-        use super::menu_bar::{render_status_icon, Appearance, MenuBarItem, Tone};
-        let initial_item = MenuBarItem {
-            tone: Tone::Offline, // 启动瞬间网关未运行；后续刷新会校正为真实状态
-            text: String::new(),
-            tooltip: String::new(),
-        };
-        // 启动瞬间可能没有可见 webview 能读取系统外观，按当前系统的
-        // `app.default_window_icon` 上下文推断不出——退化为 Light，
-        // 第一个 10s 刷新循环会自动校正为真实外观。
-        render_status_icon(&initial_item, app.default_window_icon(), Appearance::Light)
+        use super::menu_bar::render_template_icon;
+        render_template_icon(app.default_window_icon())
     };
     #[cfg(not(target_os = "macos"))]
     let initial_icon = app.default_window_icon().cloned().unwrap();
@@ -191,6 +182,8 @@ pub fn setup_tray<R: Runtime>(app: &mut App<R>) -> Result<(), Box<dyn std::error
         .menu(&menu)
         .tooltip("PoolGate · 本地模型网关")
         .icon(initial_icon)
+        // macOS：Template 图标自动适配明暗；状态点在富文本标题中，不受染色影响。
+        .icon_as_template(cfg!(target_os = "macos"))
         .on_menu_event(move |app, event| {
             handle_menu_event(app, event.id.as_ref(), &event_range);
         })

@@ -117,7 +117,10 @@ impl ProviderRepo {
         let conn = conn.lock().map_err(|e| e.to_string())?;
         let mut stmt = conn
             .prepare(
-                "SELECT id, name, type, base_url, base_urls, protocol, protocols, route_takeover, api_keys, models, proxy_url, custom_headers, timeout_ms, priority, enabled, created_at, auth_mode, oauth_config FROM providers ORDER BY priority, name",
+                // Display order is independent of routing priority: enabled providers
+                // first, newest creation time first, disabled providers last. `rowid`
+                // breaks ties because SQLite's CURRENT_TIMESTAMP has second precision.
+                "SELECT id, name, type, base_url, base_urls, protocol, protocols, route_takeover, api_keys, models, proxy_url, custom_headers, timeout_ms, priority, enabled, created_at, auth_mode, oauth_config FROM providers ORDER BY CASE WHEN enabled = 0 THEN 1 ELSE 0 END, created_at DESC, rowid DESC",
             )
             .map_err(|e| e.to_string())?;
 
@@ -308,5 +311,42 @@ mod tests {
             provider(Some(r#"{"chat":""}"#)).base_url_for_protocol("chat"),
             "https://legacy.example.com"
         );
+    }
+
+    #[test]
+    fn list_all_orders_available_newest_first_and_disabled_last() {
+        use super::ProviderRepo;
+        use rusqlite::Connection;
+        use std::sync::Mutex;
+
+        let conn = Mutex::new(Connection::open_in_memory().unwrap());
+        {
+            let db = conn.lock().unwrap();
+            db.execute_batch(
+                "CREATE TABLE providers (
+                    id TEXT PRIMARY KEY, name TEXT NOT NULL, type TEXT NOT NULL,
+                    base_url TEXT NOT NULL, base_urls TEXT, protocol TEXT NOT NULL,
+                    protocols TEXT, route_takeover INTEGER, api_keys TEXT, models TEXT,
+                    proxy_url TEXT, custom_headers TEXT, timeout_ms INTEGER,
+                    priority INTEGER, enabled BOOLEAN, created_at DATETIME,
+                    auth_mode TEXT, oauth_config TEXT
+                );
+                INSERT INTO providers (id,name,type,base_url,protocol,enabled,created_at)
+                    VALUES ('old','Old','official','https://old.example.com','openai',1,'2026-01-01 00:00:00');
+                INSERT INTO providers (id,name,type,base_url,protocol,enabled,created_at)
+                    VALUES ('new','New','official','https://new.example.com','openai',1,'2026-01-02 00:00:00');
+                INSERT INTO providers (id,name,type,base_url,protocol,enabled,created_at)
+                    VALUES ('disabled','Disabled','official','https://disabled.example.com','openai',0,'2026-12-31 00:00:00');",
+            )
+            .unwrap();
+        }
+
+        let ids: Vec<String> = ProviderRepo
+            .list_all(&conn)
+            .unwrap()
+            .into_iter()
+            .map(|item| item.id)
+            .collect();
+        assert_eq!(ids, vec!["new", "old", "disabled"]);
     }
 }

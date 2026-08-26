@@ -384,12 +384,12 @@ button { -webkit-app-region: no-drag; }
 .pg-tg-logo-btn:hover { transform: scale(1.06); filter: brightness(1.05); }
 .pg-tg-logo-btn:active { transform: scale(.94); }
 .pg-tg-logo-btn.rate-on img { box-shadow: 0 0 0 2px var(--tg-primary), 0 4px 12px rgba(10, 132, 255, .4); }
-.pg-tg-title-group { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.pg-tg-title-group { flex: 0 1 140px; min-width: 78px; display: flex; flex-direction: column; gap: 1px; }
 .pg-tg-title-row { min-width: 0; display: flex; align-items: center; gap: 8px; }
-.pg-tg-title-group h1 { min-width: 0; margin: 0; font-size: 19px; line-height: 22px; font-weight: 650; letter-spacing: -.02em; color: var(--tg-text); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.pg-tg-subtitle { color: var(--tg-text-2); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.pg-tg-online { flex: none; display: inline-flex; align-items: center; gap: 4px; color: var(--tg-text-2); font-size: 11px; font-weight: 500; white-space: nowrap; }
-.pg-tg-online i { width: 7px; height: 7px; border-radius: 50%; background: #b8bcc0; }
+/* 品牌名称是托盘识别入口，永远保留完整的 PoolGate，不让右侧时间切换挤出省略号。 */
+.pg-tg-title-group h1 { flex: none; margin: 0; font-size: 19px; line-height: 22px; font-weight: 650; letter-spacing: -.02em; color: var(--tg-text); overflow: visible; white-space: nowrap; text-overflow: clip; }
+.pg-tg-online { flex: none; display: inline-flex; align-items: center; gap: 4px; color: var(--tg-text-2); font-size: 10px; font-weight: 500; white-space: nowrap; }
+.pg-tg-online i { width: 6px; height: 6px; border-radius: 50%; background: #b8bcc0; }
 .pg-tg-online.on { color: #248a3d; }
 .pg-tg-online.on i { background: var(--tg-success); box-shadow: 0 0 8px rgba(52, 199, 89, .5); }
 .pg-tg-segmented { flex: none; display: flex; gap: 2px; padding: 3px; border-radius: 16px; background: var(--tg-seg-bg); box-shadow: inset 0 1px 2px rgba(50, 50, 55, .06); }
@@ -2173,9 +2173,11 @@ body.pg-topology-fullscreen-open {
   --tg-success: #32d74b;
   --tg-warn: #ffd60a;
   --tg-danger: #ff453a;
-  --tg-text: #eef5fb;
-  --tg-text-2: #a8b2c0;
-  --tg-text-3: #77818e;
+  /* 托盘背景受 macOS vibrancy/玻璃透明度影响较大，不能使用过暗的
+     secondary/tertiary 色；否则浅色桌面透出时，小号文字会接近背景而难以阅读。 */
+  --tg-text: #f4f7fb;
+  --tg-text-2: #c7d0dc;
+  --tg-text-3: #aeb9c7;
   --tg-card-bg: rgba(48, 52, 56, .28);
   --tg-card-border: rgba(255, 255, 255, .12);
   --tg-item-bg: rgba(255, 255, 255, .06);
@@ -2294,6 +2296,55 @@ body.pg-topology-fullscreen-open {
 [data-theme="dark"] .pg-tray-pool-copy > div > span.healthy { color: #2bc1a5; }
 [data-theme="dark"] .pg-tray-mini-node.gateway.online > span { color: #2bc1a5; }
 [data-theme="dark"] .pg-tray-current-route em { color: var(--tg-warn); }
+
+/* ---- 托盘小号信息文字的可读性兜底 ----
+   会话/轮次详情、时间戳、缓存统计和底部状态栏大量使用 tertiary 色。
+   深色玻璃并不总是落在纯深背景上（macOS vibrancy 可能透出浅色桌面），
+   因此这些文字统一使用上方提亮后的层级 token，保持信息层级但避免发灰发黑。 */
+[data-theme="dark"] .pg-tm-session-row2,
+[data-theme="dark"] .pg-tm-session-row3,
+[data-theme="dark"] .pg-tm-turn-head,
+[data-theme="dark"] .pg-tm-turn-time,
+[data-theme="dark"] .pg-tm-turn-row2,
+[data-theme="dark"] .pg-tm-turn-row2 .pg-tm-turn-cost,
+[data-theme="dark"] .pg-tm-qw-ident,
+[data-theme="dark"] .pg-tm-qw-ring-label,
+[data-theme="dark"] .pg-tm-qw-win-row em,
+[data-theme="dark"] .pg-tm-qw-reset,
+[data-theme="dark"] .pg-tm-qw-more,
+[data-theme="dark"] .pg-tm-qw-stat span,
+[data-theme="dark"] .pg-tm-model-pct,
+[data-theme="dark"] .pg-tm-nav-count,
+[data-theme="dark"] .pg-tm-nav-arrow,
+[data-theme="dark"] .pg-tm-at-chevron,
+[data-theme="dark"] .pg-tg-footer-status small,
+[data-theme="dark"] .pg-tg-axis,
+[data-theme="dark"] .pg-tm-trend-axis,
+[data-theme="dark"] .pg-tm-empty-state,
+[data-theme="dark"] .pg-tm-turn-empty { color: var(--tg-text-3); }
+[data-theme="dark"] .pg-tm-sub-row,
+[data-theme="dark"] .pg-tm-sub-row em,
+[data-theme="dark"] .pg-tm-session-row2 em,
+[data-theme="dark"] .pg-tm-session-row3 svg,
+[data-theme="dark"] .pg-tm-tool-right em,
+[data-theme="dark"] .pg-tm-at-meta,
+[data-theme="dark"] .pg-tg-footer-status span,
+[data-theme="dark"] .pg-tg-route-foot,
+[data-theme="dark"] .pg-tg-activity-meta,
+[data-theme="dark"] .pg-tg-head-status,
+[data-theme="dark"] .pg-tg-card-head code { color: var(--tg-text-2); }
+[data-theme="dark"] .pg-tm-session-title,
+[data-theme="dark"] .pg-tm-session-row1 b,
+[data-theme="dark"] .pg-tm-turn-row1 b,
+[data-theme="dark"] .pg-tm-turn-row2 em,
+[data-theme="dark"] .pg-tm-model-name,
+[data-theme="dark"] .pg-tm-model-tok,
+[data-theme="dark"] .pg-tm-tool-name,
+[data-theme="dark"] .pg-tm-tool-right b,
+[data-theme="dark"] .pg-tm-sub-row b,
+[data-theme="dark"] .pg-tm-qw-win-name,
+[data-theme="dark"] .pg-tm-qw-win-row b,
+[data-theme="dark"] .pg-tm-qw-stat b { color: var(--tg-text); }
 [data-theme="dark"] .pg-tray-mini-link::before,
 [data-theme="dark"] .pg-tray-mini-link::after { background: #6d7680; }
 

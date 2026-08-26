@@ -87,6 +87,38 @@ const typeOptions = [
   { value: "local", label: "本地" },
 ];
 
+/**
+ * SQLite stores provider timestamps as `YYYY-MM-DD HH:mm:ss`; newer clients
+ * may return an ISO timestamp with either `Z` or an explicit timezone offset.
+ */
+function providerCreatedTimestamp(value?: string): number {
+  const raw = value?.trim();
+  if (!raw) return 0;
+
+  // SQLite CURRENT_TIMESTAMP is UTC in `YYYY-MM-DD HH:mm:ss` form. Treat
+  // timezone-less ISO values as UTC as well, while preserving explicit offsets.
+  const normalized = raw.includes("T") ? raw : raw.replace(" ", "T");
+  const hasTimezone = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(normalized);
+  const timestamp = Date.parse(hasTimezone ? normalized : `${normalized}Z`);
+  return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
+/**
+ * Provider display order: enabled providers first, then newest first. Disabled
+ * providers are the UI's unavailable state and always stay at the bottom.
+ */
+function compareProvidersForDisplay(left: Provider, right: Provider): number {
+  const leftUnavailable = left.enabled === false ? 1 : 0;
+  const rightUnavailable = right.enabled === false ? 1 : 0;
+  if (leftUnavailable !== rightUnavailable) return leftUnavailable - rightUnavailable;
+
+  const byCreatedAt = providerCreatedTimestamp(right.created_at) - providerCreatedTimestamp(left.created_at);
+  if (byCreatedAt !== 0) return byCreatedAt;
+
+  // Keep ordering deterministic for legacy rows without created_at.
+  return right.id.localeCompare(left.id);
+}
+
 interface ProviderForm {
   name: string;
   type: string;
@@ -319,12 +351,14 @@ export default function ProvidersPage() {
   // "Rendered more hooks than during the previous render"
   if (isLoading) return <PageSpinner />;
 
-  const filtered = (providers ?? []).filter((p) => {
-    if (search && !p.name.toLowerCase().includes(search.toLowerCase())) return false;
-    if (filterType && p.type !== filterType) return false;
-    if (filterProtocol && p.protocol !== filterProtocol) return false;
-    return true;
-  });
+  const filtered = [...(providers ?? [])]
+    .sort(compareProvidersForDisplay)
+    .filter((p) => {
+      if (search && !p.name.toLowerCase().includes(search.toLowerCase())) return false;
+      if (filterType && p.type !== filterType) return false;
+      if (filterProtocol && p.protocol !== filterProtocol) return false;
+      return true;
+    });
 
   const openTemplatePicker = () => {
     setModalMode("template");

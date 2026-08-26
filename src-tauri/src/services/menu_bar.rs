@@ -1,18 +1,10 @@
 //! macOS 菜单栏 / Windows 托盘状态图标（PoolGate 菜单栏设计规范）。
 //!
-//! macOS：菜单栏 Logo 颜色随系统外观切换——
-//! **浅色和深色菜单栏都使用白色实心方块**，与系统菜单栏里的其它图标保持一致；
-//! 两种外观的 P 与符号都保持透明镂空，直接露出菜单栏背景。
-//! 也**不在离线时降半透明**。右侧保留**彩色状态点 + 状态色光晕**表达
-//! 综合状态（绿/蓝/橙/红）。不启用 NSImage 模板模式：模板会把整图当
-//! 蒙版染成黑白，彩色状态点也会丢，这里按系统外观预先着色再普通模式
-//! 应用。状态与数字同时在系统原生标题（`set_title`，颜色随菜单栏深浅
-//! 自适应）与 tooltip 中：
-//! - 🟢 正常运行：状态点绿，tooltip「PoolGate · 在线 · 今日 240,408 Tokens」
-//! - 🔵 流量活跃：近 5 分钟有流量增长，状态点蓝
-//! - 🟠 轻度告警：Token 用量接近额度上限（剩余 <15%），状态点橙
-//! - 🔴 网关离线：网关未运行，状态点红，tooltip「PoolGate · 网关离线」
+//! macOS：Logo 使用透明度蒙版并启用 NSImage template，由 AppKit 根据菜单栏
+//! 状态项的实际有效外观自动切换黑/白；云朵与 P 保持透明镂空。四态彩色状态点
+//! 通过原生标题中的彩色圆形标记表达，避免被 Template 一并染色。
 //!
+
 //! Windows/Linux：通知区保持真实彩色应用 Logo + 右下角状态点（按**综合严重度**
 //! 着色：网关离线（红）> 额度告警/耗尽（橙）> 流量活跃（蓝）> 正常（绿））；
 //! 文本不支持标题，状态与数字均在 tooltip 中。
@@ -35,7 +27,7 @@ use tauri::{AppHandle, Manager, Runtime};
 use crate::AppState;
 
 /// 旧版「第二个托盘」（网关状态图标）的 ID，仅用于启动时清理历史残留。
-const TRAY_GATEWAY_ID: &str = "poolgate-gateway-tray";
+pub(crate) const TRAY_GATEWAY_ID: &str = "poolgate-gateway-tray";
 
 /// 状态色调（与托盘卡片/仪表盘一致的语义色）。
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -304,24 +296,20 @@ fn combined_status(running: bool, active: bool, quota_pct: Option<f64>) -> (Tone
 /// macOS 上 `NSStatusItem` 的移除必须发生在主线程——从 tokio 工作线程直接移除会在
 /// Drop 时触发 `removeStatusItem` 崩溃（EXC_BREAKPOINT / assertBarrierOnQueue）。
 ///
-/// 菜单栏外观随系统自动适配：本函数每次调用都会从 `app.get_webview_window("main")`
-/// 的 `theme()` 读取当前系统外观（macOS 上即 `NSApp.effectiveAppearance`），
-/// 浅色菜单栏下渲染深色 Logo，深色菜单栏下渲染近白 Logo；并把 LogoMode
-/// 切到 Silhouette 让深色菜单栏下的形态与系统模板图标一致（Wi-Fi /
-/// Battery / Clock）。主线程事件 `WindowEvent::ThemeChanged` 会触发本函数
-/// 立即重绘，不必等 10s 刷新循环。
+/// 菜单栏外观随系统自动适配：macOS Logo 使用 `NSImage template`，由 AppKit
+/// 根据菜单栏状态项的实际背景（含壁纸驱动的明暗变化）自动切换黑/白，**不读取
+/// 也不依赖主窗口主题**。主线程事件 `WindowEvent::ThemeChanged` 仍会触发本函数
+/// 立即重绘，保证标题/状态点及时刷新。
 pub fn apply_menu_bar<R: Runtime>(app: &AppHandle<R>, state: &Arc<AppState>) -> Result<(), String> {
-    let appearance = Appearance::resolve(app);
-    apply_menu_bar_with_appearance(app, state, appearance)
+    apply_menu_bar_with_appearance(app, state, Appearance::resolve(app))
 }
 
-/// 同 [`apply_menu_bar`]，但调用方直接传入已确定的外观。`WindowEvent::ThemeChanged`
-/// 处理器优先使用此变体——从事件载荷拿到的主题比再读 `window.theme()` 更稳，
-/// 且主题切换瞬间不会因窗口未被查询到而恢复到默认 Light。
+/// 同 [`apply_menu_bar`]。`appearance` 参数仅为兼容既有调用方保留：macOS 的
+/// Logo 明暗已交给 Template 机制，状态点颜色来自 `Tone`，两者都不依赖外观。
 pub fn apply_menu_bar_with_appearance<R: Runtime>(
     app: &AppHandle<R>,
     state: &Arc<AppState>,
-    appearance: Appearance,
+    _appearance: Appearance,
 ) -> Result<(), String> {
     let main_setting = state
         .db
@@ -343,11 +331,8 @@ pub fn apply_menu_bar_with_appearance<R: Runtime>(
         top1_model_name.as_deref(),
     );
 
-    // 每次渲染重新解析系统外观：macOS 菜单栏深浅随 NSAppearance 切换，
-    // 浅色菜单栏 → 深色 Logo（含 Cutout），深色菜单栏 → 近白 Logo（Silhouette）。
-    // 不缓存 appearance —— `WindowEvent::ThemeChanged` 会立即重新调用本函数。
-    let items: Vec<(String, MenuBarItem, Appearance)> =
-        vec![(crate::services::tray::TRAY_ID.to_string(), item, appearance)];
+    let items: Vec<(String, MenuBarItem)> =
+        vec![(crate::services::tray::TRAY_ID.to_string(), item)];
 
     let app = app.clone();
     let task_app = app.clone();
@@ -364,34 +349,144 @@ pub fn apply_menu_bar_with_appearance<R: Runtime>(
 /// `removeStatusItem` 崩溃。
 fn apply_items_main_thread<R: Runtime>(
     app: &AppHandle<R>,
-    items: &[(String, MenuBarItem, Appearance)],
+    items: &[(String, MenuBarItem)],
 ) -> Result<(), String> {
-    // 旧版 separate 模式创建过第二个托盘（网关状态点）；统一为单一图标后移除
-    // 残留，避免菜单栏出现多余的状态点（返回值在主线程 Drop，原生移除安全）。
+    // 清理旧版本遗留的独立状态托盘，避免截图中出现左侧额外方块。
     let _ = app.remove_tray_by_id(TRAY_GATEWAY_ID);
     let app_icon = app.default_window_icon().map(|icon| icon.to_owned());
-    for (id, item, appearance) in items {
+    for (id, item) in items {
         let Some(tray) = app.tray_by_id(id.as_str()) else {
             continue;
         };
-        // macOS：按 appearance 选择主色与 LogoMode（浅色 → 深色 + Cutout，
-        // 深色 → 近白 + Silhouette），普通模式应用（不启用 NSImage template——
-        // 模板模式会把整图染成黑白，状态点彩色就丢了）。
         #[cfg(target_os = "macos")]
-        let image = render_status_icon(item, app_icon.as_ref(), *appearance);
+        {
+            // Logo：Template 蒙版图标（圆角 + 云朵/P 透明镂空），AppKit 按
+            // 菜单栏实际背景自动黑/白，切壁纸也能同步。原子更新避免闪烁。
+            // 状态点不能画进这张图——Template 会把彩色一并染成黑/白。
+            tray.set_icon_with_as_template(Some(render_template_icon(app_icon.as_ref())), true)
+                .map_err(|e| e.to_string())?;
+            // 状态点：写入原生标题富文本首字符（彩色 ●），位置天然在 Logo 与
+            // 文字之间；其余文字不加属性，继承系统 Label 色（同样自动适配明暗）。
+            set_status_title(&tray, item.tone, &item.text)?;
+        }
         #[cfg(not(target_os = "macos"))]
-        let image = render_tray_icon(item.tone, app_icon.as_ref());
-        tray.set_icon(Some(image)).map_err(|e| e.to_string())?;
-        // macOS：主文本交给系统原生渲染（`NSStatusItem.button.title`）——系统字体
-        // SF Pro、原生抗锯齿、颜色随菜单栏深浅自动适配（深色菜单栏 → 白色文字），
-        // 与开源 Token Monitor 一致；Windows 托盘不支持标题，文本在 tooltip。
-        #[cfg(target_os = "macos")]
-        tray.set_title(Some(item.text.clone()))
-            .map_err(|e| e.to_string())?;
+        {
+            // Windows/Linux 通知区：彩色 Logo + 右下角状态点画在同一张图里。
+            let image = render_tray_icon(item.tone, app_icon.as_ref());
+            tray.set_icon(Some(image)).map_err(|e| e.to_string())?;
+        }
         tray.set_tooltip(Some(item.tooltip.clone()))
             .map_err(|e| e.to_string())?;
     }
     Ok(())
+}
+
+/// macOS：把「彩色状态点 ● + 主文本」写入 NSStatusItem 按钮的富文本标题。
+///
+/// Logo 图标走 `NSImage template` 后，彩色状态点无法再放进图标（会被 Template
+/// 染成黑/白）；改为在标题 `●` 字符上单独设置 `NSForegroundColorAttributeName`，
+/// 保留四态颜色，且位置固定在 Logo 与文字之间。标题布局为 `" ●  " + 主文本`：
+/// 前导空格拉开 Logo 与状态点的间距（NSStatusItem 的图标-标题间距系统固定、
+/// 不可配置，用空格补 ~3pt），● 与主文本之间双空格再拉开 ~3pt。主文本整体
+/// 加粗（NSFontWeightBold），状态点与前后空格继承按钮默认字体，随菜单栏明暗自动适配。
+#[cfg(target_os = "macos")]
+fn set_status_title<R: Runtime>(
+    tray: &tauri::tray::TrayIcon<R>,
+    tone: Tone,
+    text: &str,
+) -> Result<(), String> {
+    use objc2::runtime::AnyObject;
+    use objc2::MainThreadMarker;
+    use objc2_app_kit::{
+        NSBaselineOffsetAttributeName, NSColor, NSFont, NSFontAttributeName,
+        NSForegroundColorAttributeName,
+    };
+    use objc2_foundation::{NSMutableAttributedString, NSNumber, NSRange, NSString};
+
+    // 状态点视觉尺寸：● 字符默认随菜单栏字体渲染（与主文本同大），视觉偏大；
+    // 缩小到主文本字号的 ~60%，并用基线上移补偿保持与主文本垂直居中。
+    const STATUS_DOT_FONT_SCALE: f64 = 0.6;
+    // 基线补偿系数：● 的视觉中心约在基线上方 x-height/2 处，缩小后需上移
+    // （原字号 − 点字号）× 该系数，才能与未缩放的 ● 保持同一视觉中线。
+    const STATUS_DOT_BASELINE_COMPENSATION: f64 = 0.3;
+
+    let text = text.to_string();
+    tray.with_inner_tray_icon(move |inner| {
+        let Some(status_item) = inner.ns_status_item() else {
+            return;
+        };
+        // with_inner_tray_icon 保证闭包在主线程执行，MainThreadMarker 必然可用。
+        let Some(mtm) = MainThreadMarker::new() else {
+            return;
+        };
+        let Some(button) = status_item.button(mtm) else {
+            return;
+        };
+        let [r, g, b] = tone.rgb();
+        let color = NSColor::colorWithSRGBRed_green_blue_alpha(
+            f64::from(r) / 255.0,
+            f64::from(g) / 255.0,
+            f64::from(b) / 255.0,
+            1.0,
+        );
+        // 点字号跟随按钮当前字体（不同显示器菜单栏字号不同），无字体时回退 13pt。
+        let font_size = button
+            .font()
+            .map(|f| f.pointSize() as f64)
+            .filter(|size| *size > 0.0)
+            .unwrap_or(13.0);
+        let dot_size = (font_size * STATUS_DOT_FONT_SCALE).max(6.0);
+        let dot_font = NSFont::systemFontOfSize(dot_size);
+        let baseline_offset = (font_size - dot_size) * STATUS_DOT_BASELINE_COMPENSATION;
+        // 主文本加粗：NSFontWeightBold（0.56），与状态点/空格的系统默认字体区分。
+        const TEXT_FONT_WEIGHT_BOLD: f64 = 0.56;
+        let text_font = NSFont::systemFontOfSize_weight(font_size, TEXT_FONT_WEIGHT_BOLD);
+
+        let title = NSMutableAttributedString::new();
+        unsafe {
+            // 标题布局 `" ●  "`：前导空格拉开 Logo 与状态点（系统图标-标题间距
+            // 固定，用空格补 ~3pt）；● 后双空格在原有间距基础上再加 ~3pt。
+            // 状态点是第 2 个字符（UTF-16 index 1），属性只作用于它本身。
+            title.replaceCharactersInRange_withString(
+                NSRange::new(0, 0),
+                &NSString::from_str(" ●  "),
+            );
+            let value: &AnyObject = &*(&*color as *const NSColor as *const AnyObject);
+            title.addAttribute_value_range(
+                &NSForegroundColorAttributeName,
+                value,
+                NSRange::new(1, 1),
+            );
+            let font_value: &AnyObject = &*(&*dot_font as *const NSFont as *const AnyObject);
+            title.addAttribute_value_range(&NSFontAttributeName, font_value, NSRange::new(1, 1));
+            let offset_num = NSNumber::numberWithDouble(baseline_offset);
+            let offset_value: &AnyObject =
+                &*(&*offset_num as *const NSNumber as *const AnyObject);
+            title.addAttribute_value_range(
+                &NSBaselineOffsetAttributeName,
+                offset_value,
+                NSRange::new(1, 1),
+            );
+            if !text.is_empty() {
+                let text_start = title.length();
+                title.replaceCharactersInRange_withString(
+                    NSRange::new(text_start, 0),
+                    &NSString::from_str(&text),
+                );
+                // 主文本加粗（含「今日/工具/模型」标签与数字整体），空格与
+                // 状态点不加粗，保持点与两侧元素的轻量对比。
+                let bold_value: &AnyObject =
+                    &*(&*text_font as *const NSFont as *const AnyObject);
+                title.addAttribute_value_range(
+                    &NSFontAttributeName,
+                    bold_value,
+                    NSRange::new(text_start, text.encode_utf16().count()),
+                );
+            }
+        }
+        button.setAttributedTitle(&title);
+    })
+    .map_err(|e| e.to_string())
 }
 
 // ───────────────────────── 文本与数字格式化 ─────────────────────────
@@ -445,17 +540,17 @@ fn with_commas(value: i64) -> String {
 const RENDER_SCALE: u32 = 2;
 /// macOS 菜单栏图标高度（pt 等价）：菜单栏 ≈ 24pt，状态栏图标 slot = 18pt。
 const STATUS_LOGO_SIZE: u32 = 18 * RENDER_SCALE;
-/// 状态点与两侧元素的间距（pt 等价 5）：云朵图标 |—GAP—| 状态点 |—GAP—| 文本。
-/// 从 8 收紧到 5，让画布右侧空 strip 减少，图标看起来不再被框在过宽容器里。
-const GAP: u32 = 5 * RENDER_SCALE;
+/// 状态点与两侧元素的间距（pt 等价 8）：云朵图标 |—GAP—| 状态点 |—GAP—| 文本。
+/// 用户反馈 5pt 偏挤，回调到 8pt（+3）：Logo 与状态点/主文本之间留出呼吸感。
+const GAP: u32 = 8 * RENDER_SCALE;
 /// **云朵-P Logo 边长**：从 16 → 18pt，**填满 18pt 视觉高度**。之前 LOGO_SIZE 16
 /// + LOGO_Y 1 = 占画布 89%，比典型 18pt 图标（AirPods / Wi-Fi 等）矮约 11%，肉眼
 /// 可辨的「偏小」。改后 LOGO 占据完整 18pt 高度，跟其他应用齐平。
 const LOGO_SIZE: u32 = 18 * RENDER_SCALE;
-/// 状态点直径（5pt + 亚像素抗锯齿）。
-const DOT_DIAMETER: u32 = 5 * RENDER_SCALE;
-/// 菜单栏图标画布宽：pt 价 = Logo(18) + GAP(5) + 点(5) + GAP(5) = 33；
-/// @2x 源 = 66 px。
+/// 状态点直径（4pt + 亚像素抗锯齿）。
+const DOT_DIAMETER: u32 = 4 * RENDER_SCALE;
+/// 菜单栏图标画布宽：Logo(18) + GAP(8) + 状态点(4) + GAP(8) = 38pt；
+/// @2x 源 = 76 px。
 const STATUS_CANVAS_W: u32 = LOGO_SIZE + GAP + DOT_DIAMETER + GAP;
 /// Logo 从画布 (0, 0) 起步——填满垂直 slot，不再像 LOGO_Y = 1 那样顶部留 1px 空带。
 const LOGO_X: u32 = 0;
@@ -479,7 +574,7 @@ const CORNER_RADIUS: f32 = 2.5 * RENDER_SCALE as f32;
 /// 上 `LOGO_COLOR` 深色实心方块与背景之间加一层 1px 透明描边，让二者不完全融合。
 /// 38% 透明沱合 macOS App Icon / Pixpin 的「软缝」条谈，上 @2x = 38% * 255 ≈ 98。
 const CUTOUT_STROKE_ALPHA: u8 = (0.38 * 255.0) as u8;
-/// macOS 菜单栏外观（决定 Logo 主色 + LogoMode）。随系统外观切换：
+/// macOS 菜单栏外观（仅用于普通 RGBA 回归渲染，生产 Logo 由 Template 自动适配）。随系统外观切换：
 /// - `Light` → 浅色菜单栏（NSLightAppearance 系），Logo 使用暖灰近黑
 ///   `#242523`（RGB 36, 37, 35），与 macOS 浅色菜单栏下第三方应用
 ///   （Warp / GitHub Desktop / Cursor 等）的常见图标色 RGB(~36, 36, 33)
@@ -498,10 +593,10 @@ const CUTOUT_STROKE_ALPHA: u8 = (0.38 * 255.0) as u8;
 ///   对应的「暖灰近黑 / 近白色」基色，兼得柔和对齐与深浅适配。
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum Appearance {
-    /// 浅色菜单栏：白色实心方块，P 与符号为透明镂空。
+    /// 浅色菜单栏：暖灰近黑实心方块，P 与符号为透明镂空。
     #[default]
     Light,
-    /// 深色菜单栏：同样使用白色实心方块，P 与符号为透明镂空。
+    /// 深色菜单栏：近白实心方块，P 与符号为透明镂空。
     Dark,
 }
 
@@ -521,8 +616,9 @@ impl Appearance {
         }
     }
 
-    /// 从 AppHandle 任意可用 webview 取外观（main > tray-card > 默认 Light）。
-    /// 找不到窗口时不强行报错——主线程渲染仍可继续，缺省用浅色基色。
+    /// 从 AppHandle 读取当前系统外观。优先使用主窗口，其次托盘窗口；窗口
+    /// 主题变化事件会立即触发重绘。壁纸变化本身不触发 WebView theme 事件，
+    /// 因此生产路径不应依赖窗口主题来模拟状态栏的有效外观。
     pub fn resolve<R: Runtime>(app: &AppHandle<R>) -> Self {
         for label in ["main", crate::services::tray::TRAY_WINDOW_LABEL] {
             if let Some(window) = app.get_webview_window(label) {
@@ -532,16 +628,16 @@ impl Appearance {
         Self::Light
     }
 
-    /// 当前外观下的 Logo 主色（单色填到云朵-P 形状 / 实心方块）。
+    /// 当前外观下的 Logo 主色（普通 RGBA 回归渲染使用）。
     fn logo_color(self) -> [u8; 3] {
         match self {
-            // 两种外观都对齐 macOS 菜单栏其它图标，使用同一白色 Logo。
+            // 对齐 macOS 菜单栏其它图标：浅色菜单栏深色 Logo、深色菜单栏浅色 Logo。
             Self::Light => LIGHT_LOGO_COLOR,
             Self::Dark => DARK_LOGO_COLOR,
         }
     }
 
-    /// 当前外观下的 LogoMode：两种菜单栏外观都使用 `Cutout`。
+    /// 当前外观下的 LogoMode（普通 RGBA 回归渲染使用）。
     /// Logo 整体保持单一深色/白色，云朵-P 里的 P 与符号保持透明，直接露出
     /// 菜单栏背景；只有整体色值随浅色/深色菜单栏切换。
     fn logo_mode(self) -> LogoMode {
@@ -549,27 +645,20 @@ impl Appearance {
     }
 }
 
-/// 浅色菜单栏下的 Logo 主色：与其它菜单栏图标一致的白色。
-const LIGHT_LOGO_COLOR: [u8; 3] = [255, 255, 255];
-/// 深色菜单栏下也使用同一白色 Logo，不随外观切换成深色。
-const DARK_LOGO_COLOR: [u8; 3] = [255, 255, 255];
+/// 浅色菜单栏下的 Logo 主色：暖灰近黑，与浅色菜单栏下其它图标一致（`#242523`）。
+const LIGHT_LOGO_COLOR: [u8; 3] = [36, 37, 35];
+/// 深色菜单栏下的 Logo 主色：近白色，与深色菜单栏下系统模板图标一致（`#e6e6e8`）。
+const DARK_LOGO_COLOR: [u8; 3] = [230, 230, 232];
 /// macOS 菜单栏 Logo：设计稿「云朵-P」抠图（透明底 PNG，编译期内嵌）。取自设计稿
 /// 底部「24×24」尺寸示意实例（即设计稿中菜单栏尺寸的云朵-P），其他平台继续使用
 /// 应用图标，本资源仅 macOS 使用。
 const CLOUD_P_PNG: &[u8] = include_bytes!("../../icons/cloud-p.png");
 
-/// 渲染 macOS 菜单栏图标：**云朵-P 主色（随系统外观深浅切换）+ 状态点 + 状态色光晕**。
-/// 布局：光晕（软径向，状态色，背景）→ 云朵-P Logo（单色实心底，P 与符号为
-/// 透明镂空）→ 右侧状态点（状态色实心圆，位于图标与主文本之间、垂直居中）。
-///
-/// Logo 颜色固定为白色，与 macOS 菜单栏其它图标保持一致。两种外观统一使用
-/// Cutout，不再把暗色菜单栏切成云朵-P 剪影，P/符号始终保持透明。`appearance` 仍由
-/// 调用方从 `theme()` 解析，并由 `WindowEvent::ThemeChanged` 触发重绘。
-///
-/// 不启用 NSImage 模板模式，否则状态点彩色会被系统染成黑白。
+/// 渲染 macOS 菜单栏图标：Logo 外框使用 `appearance` 预着色，状态点与光晕
+/// 保留 `Tone` 的彩色语义；此函数用于普通 RGBA 回归测试与非 Template 路径。
 ///
 /// **主文本不画进图标**——由系统原生渲染（`set_title`）。
-#[allow(dead_code)] // Windows/Linux 构建时仅测试使用
+#[allow(dead_code)] // Template 生产路径与测试分别覆盖
 pub(crate) fn render_status_icon(
     item: &MenuBarItem,
     app_icon: Option<&Image>,
@@ -628,6 +717,64 @@ pub(crate) fn render_status_icon(
         stroke_alpha,
     );
     Image::new_owned(buf, W, H)
+}
+
+/// 生产 macOS 菜单栏图标：只输出透明度蒙版并裁成圆角，交给 AppKit
+/// 以 NSImage template 模式按状态栏实际背景着色。状态点单独绘制，避免被
+/// Template 覆盖。
+#[cfg(target_os = "macos")]
+#[allow(dead_code)]
+pub(crate) fn render_template_icon(app_icon: Option<&Image>) -> Image<'static> {
+    let icon = cloud_p_icon().or(app_icon);
+    let Some(icon) = icon else {
+        return Image::new_owned(
+            vec![0; STATUS_LOGO_SIZE as usize * STATUS_LOGO_SIZE as usize * 4],
+            STATUS_LOGO_SIZE,
+            STATUS_LOGO_SIZE,
+        );
+    };
+    let mut buf = vec![0u8; (STATUS_LOGO_SIZE * STATUS_LOGO_SIZE * 4) as usize];
+    draw_icon_scaled(
+        &mut buf,
+        STATUS_LOGO_SIZE,
+        STATUS_LOGO_SIZE,
+        icon,
+        0,
+        0,
+        STATUS_LOGO_SIZE,
+        None,
+        true,
+    );
+    apply_rounded_corners(
+        &mut buf,
+        STATUS_LOGO_SIZE,
+        STATUS_LOGO_SIZE,
+        0,
+        0,
+        STATUS_LOGO_SIZE,
+        STATUS_LOGO_SIZE,
+        CORNER_RADIUS,
+        None,
+    );
+    Image::new_owned(buf, STATUS_LOGO_SIZE, STATUS_LOGO_SIZE)
+}
+
+/// macOS 菜单栏状态点：放在 Logo 与今日 Tokens 标题之间，直径约 2pt。
+#[cfg(target_os = "macos")]
+#[allow(dead_code)]
+pub(crate) fn render_status_dot(tone: Tone) -> Image<'static> {
+    const S: u32 = 2 * RENDER_SCALE;
+    let mut buf = vec![0u8; (S * S * 4) as usize];
+    fill_circle_aa(
+        &mut buf,
+        S,
+        S,
+        S as f32 * 0.5,
+        S as f32 * 0.5,
+        S as f32 * 0.5,
+        tone.rgb(),
+    );
+    Image::new_owned(buf, S, S)
 }
 
 /// 状态光晕：以 `(cx, cy)` 为圆心的软径向渐变，alpha 从 `max_alpha` 线性衰减到
@@ -702,10 +849,10 @@ fn render_tray_icon(tone: Tone, app_icon: Option<&Image>) -> Image<'static> {
 }
 
 /// 把应用图标（RGBA）双线性缩放到 size×size 嵌入缓冲区（保留 alpha 形状）。
-/// `tint = Some(rgb)` 时输出单色（macOS 菜单栏深色单色 Logo）；`invert_alpha = true`
+/// `tint = Some(rgb)` 时输出单色（macOS 菜单栏单色 Logo）；`invert_alpha = true`
 /// 时再做一次 `alpha_out = 255 - alpha_src`，配合 `LOGO_MODE = Cutout` 把云朵-P
-/// 形状的源（白色填充）输出成「**深色实心方块中的云朵-P 窗孔**」——原透明的位置
-/// 变深色、原白色的剪影变成透明。`None` 保留原图颜色（Windows/Linux 托盘）。
+/// 形状的源（白色填充）输出成「**单色实心方块中的云朵-P 窗孔**」——原透明的位置
+/// 变主色、原白色的剪影变成透明。`None` 保留原图颜色（Windows/Linux 托盘）。
 fn draw_icon_scaled(
     buf: &mut [u8],
     w: u32,
@@ -751,10 +898,11 @@ fn draw_icon_scaled(
                 color[0] = t[0];
                 color[1] = t[1];
                 color[2] = t[2];
-                if invert_alpha {
-                    // 反转：源透明背景变成主色实心底，源 P/符号变成透明窗孔。
-                    color[3] = 255 - color[3];
-                }
+            }
+            if invert_alpha {
+                // 反转：源透明背景变成实心底，源云朵/P 变成透明窗孔。
+                // 这必须独立于 tint：NSImage template 路径不需要预先写入 RGB。
+                color[3] = 255 - color[3];
             }
             let target_x = x + px;
             let target_y = y + py;
@@ -929,7 +1077,7 @@ mod tests {
     /// 用于人工核对视觉（sips 转 PNG 后在浏览器预览）。加载真实应用图标验证最终效果。
     /// 按 [`Appearance`] 分别渲染：浅色菜单栏渲染主色 = `LIGHT_LOGO_COLOR`
     ///（暖灰近黑 + Cutout）+ 浅色底；深色菜单栏渲染主色 = `DARK_LOGO_COLOR`
-    ///（近白 + Silhouette）+ 深色底。状态点/光晕按综合状态着色，两种
+    ///（近白 + Cutout）+ 深色底。状态点/光晕按综合状态着色，两种
     /// 外观共用一套语义色（绿/蓝/橙/红）。
     #[test]
     #[ignore]
@@ -978,7 +1126,7 @@ mod tests {
         for (name, item) in items {
             let img_light = render_status_icon(item, icon.as_ref(), Appearance::Light);
             let img_dark = render_status_icon(item, icon.as_ref(), Appearance::Dark);
-            // 亮菜单栏下暖灰近黑色块主场；深菜单栏下近白剪影主场。
+            // 亮菜单栏下暖灰近黑色块主场；深菜单栏下近白实心方块主场。
             dump_ppm(
                 &dir,
                 &format!("{name}-lightbar-light"),
@@ -1159,11 +1307,11 @@ mod tests {
 
     #[test]
     fn menu_bar_icon_uses_appearance_logo_color() {
-        // 图标 = 白色 Logo + 彩色状态点 + 状态色光晕。
-        // 画布 33×18（Logo 18 + GAP + 状态点）。
-        // - Light (Cutout)：云朵-P 源 alpha 反转 → 实心方块填底色 + 云朵窗孔；
+        // 图标 = 单色 Logo + 彩色状态点 + 状态色光晕。
+        // 画布 38×18（Logo 18 + GAP + 状态点 + GAP）。
+        // - Light (Cutout)：浅色菜单栏 → 暖灰近黑实心方块 + 云朵窗孔；
         //   LOGO 区域大部分像素为主色且 alpha 接近 255（实心方块）。
-        // - Dark (Cutout)：与 Light 完全相同的白色透明镂空结构。
+        // - Dark (Cutout)：深色菜单栏 → 近白实心方块，与 Light 结构相同、仅主色不同。
         let icon = test_app_icon();
         let item = MenuBarItem {
             tone: Tone::Online,
@@ -1181,17 +1329,15 @@ mod tests {
             hits_light > 200,
             "Light 主色近不透明像素仅 {hits_light}: Cutout 实心方块应填满 Logo 区域"
         );
-        // Dark: Silhouette 云朵-P 剪影。云朵-P 源 1378×1378 (19% 软 alpha)
-        // 缩放到 LOGO_SIZE 后命中像素 ≈ 0.19 * 1296 ≈ 246（实测 288）。
-        // 容差放宽到 t·(α/255) 后的最大偏移（约 2），alpha 阈值降到 50。
+        // Dark: 与 Light 相同是 Cutout 实心方块，仅主色换成近白。
         let img_dark = render_status_icon(&item, Some(&icon), Appearance::Dark);
         assert_eq!(img_dark.width(), STATUS_CANVAS_W);
         assert_eq!(img_dark.height(), STATUS_LOGO_SIZE);
         let rgba_dark = img_dark.rgba();
-        let hits_dark = count_logo_color_pixels(rgba_dark, w, DARK_LOGO_COLOR, 50, 6);
+        let hits_dark = count_logo_color_pixels(rgba_dark, w, DARK_LOGO_COLOR, 200, 1);
         assert!(
-            hits_dark > 30,
-            "Dark 主色命中像素仅 {hits_dark}: Silhouette 云朵-P 上主色至少 30 个像素"
+            hits_dark > 200,
+            "Dark 主色近不透明像素仅 {hits_dark}: Cutout 实心方块应填满 Logo 区域"
         );
         // 两种外观共有不变量：
         // 1) 右上/右下角外侧仍透明（光晕不溢出右侧 GAP，无方块/容器硬边）；
@@ -1222,8 +1368,8 @@ mod tests {
 
     #[test]
     fn menu_bar_icon_logo_is_present_regardless_of_tone_and_appearance() {
-        // Logo 在两种 appearance 下都保持白色，状态点/光晕只受 tone 影响。
-        // 两种外观都使用 Cutout：实心方块 + 透明镂空。
+        // Logo 主色随 appearance 切换（浅色 → 暖灰近黑，深色 → 近白），
+        // 状态点/光晕只受 tone 影响。两种外观都使用 Cutout：实心方块 + 透明镂空。
         // 两种情况下都要避免「颜色完全没应用」的回归。
         let icon = test_app_icon();
         for appearance in [Appearance::Light, Appearance::Dark] {
@@ -1351,16 +1497,29 @@ mod tests {
         assert!(online_green > 5, "在线状态点应为绿色: {online_green}");
         assert_eq!(online_red, 0, "在线不应有红色状态点: {online_red}");
         assert!(offline_red > 5, "离线状态点应为红色: {offline_red}");
+
+        // 四种 Tone 都必须在菜单栏状态点中保留各自颜色。
+        for tone in [Tone::Online, Tone::Active, Tone::QuotaWarn, Tone::Offline] {
+            let item = MenuBarItem {
+                tone,
+                text: String::new(),
+                tooltip: String::new(),
+            };
+            let image = render_status_icon(&item, Some(&icon), Appearance::Light);
+            let hits = dot_region(&image, tone.rgb());
+            assert!(hits > 5, "状态 {:?} 应保留对应颜色: {hits}", tone);
+        }
     }
 
     #[test]
     fn appearance_logo_mode_matches_menu_bar_spec() {
-        // 两种外观都必须是「白色整体 + P/符号透明镂空」，不因浅色/深色菜单栏变色。
+        // 两种外观都是「实心方块 + P/符号透明镂空」；主色随菜单栏深浅切换：
+        // 浅色菜单栏 → 暖灰近黑，深色菜单栏 → 近白。
         assert!(matches!(Appearance::Light.logo_mode(), LogoMode::Cutout));
         assert!(matches!(Appearance::Dark.logo_mode(), LogoMode::Cutout));
-        assert_eq!(Appearance::Light.logo_color(), [255, 255, 255]);
-        assert_eq!(Appearance::Dark.logo_color(), [255, 255, 255]);
-        assert_eq!(LIGHT_LOGO_COLOR, DARK_LOGO_COLOR);
+        assert_eq!(Appearance::Light.logo_color(), [36, 37, 35]);
+        assert_eq!(Appearance::Dark.logo_color(), [230, 230, 232]);
+        assert_ne!(LIGHT_LOGO_COLOR, DARK_LOGO_COLOR);
     }
 
     #[test]

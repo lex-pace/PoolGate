@@ -680,7 +680,8 @@ pub(crate) fn collector_states(state: &Arc<AppState>) -> Result<Vec<ToolCollecto
         .prepare(
             "SELECT tool_id, display_name, enabled, support_level, collector_status,
                     last_collected_at, collector_error, COALESCE(custom_paths_json,'')
-             FROM tool_definition ORDER BY tool_id",
+             FROM tool_definition
+             ORDER BY tool_id",
         )
         .map_err(|e| e.to_string())?;
     let mut rows: Vec<(
@@ -744,9 +745,15 @@ pub(crate) fn collector_states(state: &Arc<AppState>) -> Result<Vec<ToolCollecto
                     custom
                 };
                 paths.sort();
+                let installed = if tool_id.starts_with("custom:") {
+                    true
+                } else {
+                    crate::token_monitor::detect::tool_is_installed(&tool_id, !paths.is_empty())
+                };
                 ToolCollectorState {
                     tool_id,
                     display_name,
+                    installed,
                     enabled: enabled != 0,
                     support_level: serde_json::from_str(&format!("\"{support_level}\""))
                         .unwrap_or(crate::token_monitor::model::SupportLevel::Basic),

@@ -76,10 +76,10 @@ const mockTrend: TrendSeries = {
 };
 
 const mockCollectors: ToolCollectorState[] = [
-  { tool_id: "claude_code", display_name: "Claude Code", enabled: true, support_level: "full", status: "active", last_collected_at: new Date().toISOString(), paths: ["~/.claude/projects/**/*.jsonl"] },
-  { tool_id: "codex", display_name: "Codex CLI", enabled: true, support_level: "standard", status: "active", last_collected_at: new Date().toISOString(), paths: ["~/.codex/sessions/**/*.jsonl"] },
-  { tool_id: "cursor", display_name: "Cursor", enabled: true, support_level: "basic", status: "idle", paths: [] },
-  { tool_id: "opencode", display_name: "OpenCode", enabled: true, support_level: "standard", status: "active", paths: ["~/.opencode/sessions/**"] },
+  { tool_id: "claude_code", display_name: "Claude Code", installed: true, enabled: true, support_level: "full", status: "active", last_collected_at: new Date().toISOString(), paths: ["~/.claude/projects/**/*.jsonl"] },
+  { tool_id: "codex", display_name: "Codex CLI", installed: true, enabled: true, support_level: "standard", status: "active", last_collected_at: new Date().toISOString(), paths: ["~/.codex/sessions/**/*.jsonl"] },
+  { tool_id: "cursor", display_name: "Cursor", installed: true, enabled: true, support_level: "basic", status: "idle", paths: [] },
+  { tool_id: "opencode", display_name: "OpenCode", installed: true, enabled: true, support_level: "standard", status: "active", paths: ["~/.opencode/sessions/**"] },
 ];
 
 const mockQuotaAccounts: QuotaAccountView[] = [

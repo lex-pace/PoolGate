@@ -651,11 +651,14 @@ export default function TokenMonitorTrayCard() {
           <div className="pg-tg-title-group">
             <div className="pg-tg-title-row">
               <h1>PoolGate</h1>
-              <span className={`pg-tg-online ${gatewayMode ? (gatewayRunning ? "on" : "") : "on"}`}>
-                <i />{gatewayMode ? (gatewayRunning ? "网关在线" : "网关离线") : "Monitor"}
+              <span
+                className={`pg-tg-online ${gatewayMode ? (gatewayRunning ? "on" : "") : "on"}`}
+                title={gatewayMode ? (gatewayRunning ? "网关在线" : "网关离线") : "Token Monitor"}
+              >
+                <i />{gatewayMode ? (gatewayRunning ? "在线" : "离线") : "Monitor"}
               </span>
             </div>
-            <span className="pg-tg-subtitle">{gatewayMode ? "本地 Agent 用量监控 · Gateway 完整模式" : "本地 Agent 用量监控 · 网关已隐藏"}</span>
+
           </div>
         </div>
         <div className="pg-tg-segmented" role="tablist">

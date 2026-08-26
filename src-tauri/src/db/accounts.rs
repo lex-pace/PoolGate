@@ -108,7 +108,7 @@ impl AccountRepo {
     pub fn list_all(&self, conn: &Mutex<Connection>) -> Result<Vec<Account>, String> {
         let conn = conn.lock().map_err(|e| e.to_string())?;
         let sql = format!(
-            "SELECT {} FROM accounts a LEFT JOIN account_usage u ON u.account_id=a.id ORDER BY a.priority, a.name",
+            "SELECT {} FROM accounts a LEFT JOIN account_usage u ON u.account_id=a.id LEFT JOIN providers p ON p.id=a.provider_id ORDER BY CASE WHEN a.status IN ('exhausted', 'error', 'token_expired', 'disabled') OR a.health_status = 'error' OR p.enabled = 0 THEN 1 ELSE 0 END, COALESCE(p.created_at, a.created_at) DESC, p.rowid DESC, a.created_at DESC, a.rowid DESC",
             ACCOUNT_COLUMNS
         );
         let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
@@ -556,6 +556,56 @@ pub fn migrate_plaintext_credentials(conn: &Mutex<Connection>) -> Result<usize, 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn list_all_orders_by_provider_created_at_and_puts_unavailable_last() {
+        let connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE providers (
+                    id TEXT PRIMARY KEY,
+                    created_at DATETIME,
+                    enabled BOOLEAN DEFAULT 1
+                 );
+                 CREATE TABLE accounts (
+                    id TEXT PRIMARY KEY,
+                    provider_id TEXT,
+                    name TEXT,
+                    api_key TEXT NOT NULL DEFAULT '',
+                    models TEXT, quota_limit REAL, quota_used REAL,
+                    status TEXT, health_status TEXT, health_code INTEGER,
+                    health_msg TEXT, health_latency INTEGER, health_check_at DATETIME,
+                    priority INTEGER, tags TEXT, last_used_at DATETIME,
+                    created_at DATETIME, credential_type TEXT, credential_data TEXT,
+                    source_format TEXT, external_account_id TEXT, email TEXT,
+                    expires_at DATETIME, metadata TEXT, credential_fingerprint TEXT,
+                    protocols TEXT, route_takeover INTEGER, secret_ref TEXT
+                 );
+                 CREATE TABLE account_usage (
+                    account_id TEXT PRIMARY KEY, plan_type TEXT, quota_windows TEXT,
+                    last_refreshed_at DATETIME, last_error TEXT, token_refreshed_at DATETIME
+                 );
+                 INSERT INTO providers VALUES
+                    ('old-provider', '2026-01-01 00:00:00', 1),
+                    ('new-provider', '2026-01-02 00:00:00', 1),
+                    ('disabled-provider', '2026-12-31 00:00:00', 0);
+                 INSERT INTO accounts (id, provider_id, name, created_at, status, health_status)
+                    VALUES ('old-account', 'old-provider', 'Old', '2026-01-03 00:00:00', 'active', 'healthy');
+                 INSERT INTO accounts (id, provider_id, name, created_at, status, health_status)
+                    VALUES ('new-account', 'new-provider', 'New', '2026-01-01 00:00:00', 'active', 'healthy');
+                 INSERT INTO accounts (id, provider_id, name, created_at, status, health_status)
+                    VALUES ('disabled-account', 'disabled-provider', 'Disabled', '2026-12-31 00:00:00', 'active', 'healthy');",
+            )
+            .unwrap();
+
+        let ids: Vec<String> = AccountRepo
+            .list_all(&Mutex::new(connection))
+            .unwrap()
+            .into_iter()
+            .map(|account| account.id)
+            .collect();
+        assert_eq!(ids, vec!["new-account", "old-account", "disabled-account"]);
+    }
 
     #[test]
     fn plaintext_migration_clears_sqlite_and_preserves_readable_secret() {

@@ -369,6 +369,8 @@ pub struct DeviceRow {
 pub struct ToolCollectorState {
     pub tool_id: String,
     pub display_name: String,
+    /// 当前是否能在本机发现该应用（CLI 或数据目录）。
+    pub installed: bool,
     pub enabled: bool,
     pub support_level: SupportLevel,
     pub status: CollectorStatus,

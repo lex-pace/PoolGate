@@ -440,27 +440,13 @@ export default function ModelResources() {
       models: parseModels(account, connector),
       source: sourceDescription(account, connector),
       routable: isDirectlyRoutable(account),
-      unavailable: isUnavailableAccount(account),
+      // AccountRepo.list_all performs the display ordering in SQLite: newest
+      // provider first, then newest account, with unavailable resources last.
+      // Keep this mapping order-preserving so pagination reflects DB order.
+      unavailable: isUnavailableAccount(account) || connector?.enabled === false,
       remainingPercent,
-      createdAt: account.created_at || "9999",
       callCount: requestCounts[account.id] || 0,
     };
-  }).sort((left, right) => {
-    // 1. Unavailable accounts go to the bottom
-    if (left.unavailable !== right.unavailable) return left.unavailable ? 1 : -1;
-
-    // 2. By remaining quota percent (lower remaining = higher priority)
-    if (left.remainingPercent !== right.remainingPercent) {
-      return left.remainingPercent - right.remainingPercent;
-    }
-
-    // 3. By call count (more calls = higher priority)
-    if (left.callCount !== right.callCount) {
-      return right.callCount - left.callCount;
-    }
-
-    // 4. By import order (older created_at = higher priority)
-    return left.createdAt.localeCompare(right.createdAt);
   }), [rawAccounts, providerMap, requestCounts]);
 
   const list = resources.filter(({ account, connector, category, models, source }) => {
