@@ -13,7 +13,7 @@
 - [x] 已补充 `.github/workflows/ci.yml`
 - [x] 已补充 Pull Request 模板
 - [x] 已补充 `package.json` 与 Cargo 仓库元数据
-- [ ] 当前工作区改动尚未完成最终提交和远程推送，仍需在提交后确认发布快照干净
+- [x] 工作区改动已提交（commit 850ca5c），工作树干净
 - [ ] CI 尚未在 GitHub 上实际运行并变绿
 - [x] Rust `fmt --check` 已在本地通过
 - [ ] 严格 Clippy 尚未通过；CI 暂以非阻断 Clippy 告警模式运行，严格脚本保留为 `pnpm run lint:rust:strict`
@@ -22,22 +22,22 @@
 
 ### 发布快照与文件清理
 
-- [ ] 审查 `git status` 中全部修改文件，确认哪些属于正式产品
-- [ ] 审查全部未跟踪文件，决定是否纳入、删除或加入 `.gitignore`
-- [ ] 确认 Token Monitor、新迁移、测试和新图标全部属于本次发布范围
+- [x] git status 干净，所有修改文件已审查并纳入提交
+- [x] 未跟踪文件已清理；docs/upgrade-checklist.html 已纳入
+- [x] Token Monitor（detect/model/service_collect）、迁移、测试和 UI 变更已确认纳入
 - [x] 删除临时预览 HTML、本地生成图片和无关实验文件；设计文档已整理到 `docs/design/`
-- [ ] 清理 `.DS_Store`、本地数据库、日志、缓存和测试输出
-- [ ] 确认没有真实 API Key、OAuth token、cookie、私有配置或用户数据
+- [x] .DS_Store 已在 .gitignore 中且未被追踪；*.db / *.db-shm / *.db-wal 已忽略
+- [x] 源码中 sk-/ghp_/AKIA 等模式均为 UI 占位符/正则示例，无真实密钥泄露
 - [ ] 对当前工作树和完整 Git 历史运行 secret scan，例如 Gitleaks
 - [x] 确认 `src-tauri/tests` 等新测试目录确实被 Cargo 执行，而不是只存在于工作区
-- [ ] 形成干净提交后再创建 release branch 和 tag
+- [x] 干净提交已形成（850ca5c），等待 release branch 创建
 
 ### 包管理和版本
 
 - [x] 决定 pnpm 为唯一前端包管理器
 - [x] 已将 `pnpm-lock.yaml`、`pnpm-workspace.yaml` 纳入提交范围
 - [x] 已删除并忽略 `package-lock.json`，避免两套 lockfile 产生歧义
-- [ ] 增加并锁定 Node.js、pnpm、Rust 版本
+- [ ] 缺少 rust-toolchain.toml、.node-version / .nvmrc；建议增加版本锁定文件
 - [ ] 统一 `package.json`、Cargo、Tauri 和 Git tag 的版本号
 - [ ] 统一 LICENSE、Cargo authors、README 中的版权主体
 
