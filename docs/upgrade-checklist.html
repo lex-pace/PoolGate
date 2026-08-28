@@ -132,19 +132,23 @@
 <div class="footer">
   <p><strong>⚠️ 许可证提醒</strong>：cockpit-tools 采用 CC BY-NC-SA 4.0（非商业 + 同源传染），不可将代码移植进 MIT 协议的 PoolGate，仅借鉴设计思路；cc-switch 为 MIT，可自由借鉴；sub2api 为 LGPL-3.0，建议只参考逻辑独立实现。</p>
   <p style="margin-top:8px"><strong>⚖️ ToS 声明</strong>：订阅账号走网关本身可能违反上游厂商服务条款，以下防封措施只能降低概率，无法保证零风险。</p>
-  <p style="margin-top:12px;color:var(--text-dim)">PoolGate 升级清单 · 生成于 2026-08-25 · 基于 sub2api / new-api / cc-switch / cockpit-tools 分析</p>
+  <p style="margin-top:12px;color:var(--text-dim)">PoolGate 升级清单 · 生成于 2026-08-25 · 更新于 2026-08-28 · 基于 sub2api / new-api / cc-switch / cockpit-tools 分析</p>
 </div>
 
 <div class="toast" id="toast"></div>
 
 <script>
 const DATA = [
-  // ═══ P0 ═══
-  { id:1, priority:"P0", title:"额度感知路由",
+  // ── 统计 ──
+  // P0: 7/10 done (模型映射、reasoning effort 后缀 待实现)
+  // P1: 5/12 done (健康分、分组隔离、测速、配额扩平台、embeddings 透传、备份迁移、deep link 待实现)
+  // P2: 0/6 done
+  // ── P0 ═══
+  { id:1, priority:"P0", title:"额度感知路由", done:true,
     desc:"将 Token Monitor 的 5h 滚动窗口 / 周窗口快照接入路由决策：优先选剩余额度多的账号；rate_limited 账号停驻到窗口重置预计时间，不再 60s 盲试——频繁撞 429 本身就是最强的风控信号。",
     sources:["security"], mods:["proxy/router","token_monitor/quota","db/accounts"],
     benefit:"直接决定订阅账号存活率，429 是封号前兆" },
-  { id:2, priority:"P0", title:"Plan 权重",
+  { id:2, priority:"P0", title:"Plan 权重", done:true,
     desc:"识别 Plus/Pro/Team 套餐类型并配置差异化权重（Pro 承担更多流量、Plus 兜底），套餐权重联动路由候选排序。数据库加 plan_tier 字段。",
     sources:["cockpit"], mods:["db/accounts","proxy/router"],
     benefit:"不同套餐耐压不同，合理分流延长账号寿命" },
@@ -156,86 +160,105 @@ const DATA = [
     desc:"-thinking/-high/-low 后缀自动转为 Claude thinking 参数或 Gemini budget。配合模型映射叠加使用。",
     sources:["newapi"], mods:["proxy/protocol"],
     benefit:"一步到位的推理模式切换，提升 Agent 效果" },
-  { id:5, priority:"P0", title:"工具配置一键接管 + 回退",
+  { id:5, priority:"P0", title:"工具配置一键接管 + 回退", done:true,
     desc:"「接管此工具」按钮：直接把 BASE_URL 写入 Claude Code settings.json / Codex config.toml / Gemini CLI 等配置文件，支持一键回退官方直连。托盘菜单加「工具接入状态」子菜单。",
     sources:["ccswitch"], mods:["services/tool接管","commands","tray"],
     benefit:"桌面网关独门优势——服务器中转站做不到" },
-  { id:6, priority:"P0", title:"供应商预设库",
-    desc:"内置常见云厂商 / 中转站 / 官方 API 的 Base URL 模板，粘贴 Key 即完成导入。配合三步向导，降低添加服务商门槛。",
+  { id:6, priority:"P0", title:"供应商预设库", done:true,
+    desc:"内置常见云厂商 / 中转站 / 官方 API 的 Base URL 模板，粘贴 Key 即完成导入。Wizard 首次运行向导已统一使用共享模板库（77+ 模板），支持搜索、分组过滤、自动填充 baseUrl/protocols/models。",
     sources:["ccswitch"], mods:["services/import","pages/Wizard"],
-    benefit:"从 5 步填表简化为 1 步粘贴" ],
-  { id:7, priority:"P0", title:"加权随机路由策略",
+    benefit:"从 5 步填表简化为 1 步粘贴" },
+  { id:7, priority:"P0", title:"加权随机路由策略", done:true,
     desc:"在现有轮询/最少使用/优先级/随机/成本优先基础上，增加 weighted-random 策略，权重字段已在 group_accounts 库表中。",
     sources:["newapi"], mods:["proxy/router"],
-    benefit:"主力号 80% + 备用号 20% 等混池意图的表达" ],
-  { id:8, priority:"P0", title:"网关成本核算",
-    desc:"复用 Token Monitor 的 pricing.rs 价格表，填入 request_logs.cost 字段。Analytics 页直接展示成本曲线——「这个月 Agent 烧了多少钱」。",
+    benefit:"主力号 80% + 备用号 20% 等混池意图的表达" },
+  { id:8, priority:"P0", title:"网关成本核算", done:true,
+    desc:"复用 Token Monitor 的 pricing.rs 价格表，填入 request_logs.cost 字段。write_route_log 已在请求完成时调用 estimate_cost() 计算成本，Analytics 页直接展示成本曲线。",
     sources:["newapi","ccswitch"], mods:["proxy/server","db/logs","pages/Analytics"],
-    benefit:"独有闭环：网关成本 + 本地工具成本一张图" ],
-  { id:9, priority:"P0", title:"局域网订阅账号仅限本机路由（安全提级）",
-    desc:"路由层按请求来源区分本机/远端，OAuth 订阅类账号只允许本机请求路由，防止同事通过局域网消耗个人订阅额度。已在下一步任务列表中，建议提级为 P0。",
+    benefit:"独有闭环：网关成本 + 本地工具成本一张图" },
+  { id:9, priority:"P0", title:"局域网订阅账号仅限本机路由（安全提级）", done:true,
+    desc:"路由层在 LAN 模式下排除非本机的 OAuth/subscription 账号（plan_tier 非空），防止同事通过局域网消耗个人订阅额度。",
     sources:["security"], mods:["proxy/router","proxy/auth"],
-    benefit:"共享场景最大的额度泄露面" ],
+    benefit:"共享场景最大的额度泄露面" },
+
+  { id:25, priority:"P0", title:"自动备份增强（数据丢失教训）", done:false,
+    desc:"当前自动备份每7天触发一次、最多保留4份，首次使用一周内完全无保护。2026-08-26 已发生真实数据丢失：卸载重装后 credentials.vault.json 丢失，27个供应商+24个账号的凭证全部需要重新添加（数据库已从 Time Machine 恢复，但密钥库未备份）。改进：启动时立即备份、保留更多份数（10份）、UI添加「立即备份/恢复」按钮、备份目录可配置（指向 iCloud 等云同步目录）。",
+    sources:["security"], mods:["services/backup","commands","pages/Settings"],
+    benefit:"防止再次发生数据丢失——这是最严重的用户信任问题" },
 
   // ═══ P1 ═══
   { id:10, priority:"P1", title:"账号健康分 + 池体检页",
     desc:"综合 429 频率、错误率、封控信号、刷新失败次数算出每账号健康分；提供「池体检」入口——批量检查、发现不健康账号、给出清理/冷却建议。与现有 alerts 表天然衔接。",
     sources:["security","cockpit"], mods:["db/accounts","pages/AccountPool"],
-    benefit:"从被动告警升级为主动巡检" ],
-  { id:11, priority:"P1", title:"设备指纹持久化收敛",
-    desc:"每账号首次登录时生成的稳定标识集合（originator、session 元数据、UA 等）持久化到账号记录，之后所有请求复用，绝不每次随机。",
+    benefit:"从被动告警升级为主动巡检" },
+  { id:11, priority:"P1", title:"设备指纹持久化收敛", done:true,
+    desc:"每账号首次登录时生成的稳定标识集合（session_id、originator、UA、extra headers）持久化到 accounts.fingerprint_json，之后所有请求复用。Codex/Claude/Gemini/Copilot 四个适配器均已接入。",
     sources:["sub2api"], mods:["services/client_profiles","db/accounts"],
-    benefit:"消除设备指纹漂移——这是自动化检测的核心信号" ],
-  { id:12, priority:"P1", title:"出站代理下沉到账号级",
-    desc:"在 providers.proxy_url 之外，给 accounts 表加可选 proxy_url，适配 reqwest 各处已有的 proxy 注入点。多账号同 IP 是最大关联风险。",
+    benefit:"消除设备指纹漂移——这是自动化检测的核心信号" },
+  { id:12, priority:"P1", title:"出站代理下沉到账号级", done:true,
+    desc:"accounts 表加 proxy_url 字段，reqwest 客户端构建时优先使用 account.proxy_url，回退 provider.proxy_url。前端账号详情面板显示代理状态。",
     sources:["sub2api"], mods:["db/accounts","proxy/protocol"],
-    benefit:"多出口降低关联风控概率" ],
+    benefit:"多出口降低关联风控概率" },
   { id:13, priority:"P1", title:"账号分组隔离（官方源 vs 中转源）",
     desc:"添加标签/分组层（如「官方源」「中转源」「Antigravity」），用于批量启停、风控分级、按组排除故障转移候选。sub2api 警告 Claude 官方与 Antigravity 不能混用上下文。",
     sources:["sub2api"], mods:["db/groups","proxy/router"],
-    benefit:"避免跨源上下文污染" ],
+    benefit:"避免跨源上下文污染" },
   { id:14, priority:"P1", title:"端点测速 + 一键连通性测试",
     desc:"对候选账号发最小请求测 TTFB/延迟，导入后立即可视化验证。基于健康检查基础设施扩展。",
     sources:["ccswitch"], mods:["services/health_check","commands"],
-    benefit:"导入即验证，不用等首次真实请求才发现问题" ],
+    benefit:"导入即验证，不用等首次真实请求才发现问题" },
   { id:15, priority:"P1", title:"配额监控扩平台",
     desc:"逐步补齐 Copilot（Inline/Chat 分项）、Claude（周窗口）、Grok billing 等接口，统一展示在 Token Monitor「额度」页。目前主要覆盖 Codex 5h 窗口。",
     sources:["cockpit"], mods:["token_monitor/quota","pages/TokenMonitor"],
-    benefit:"全平台额度一目了然" ],
+    benefit:"全平台额度一目了然" },
   { id:16, priority:"P1", title:"Embeddings / Rerank 透传",
     desc:"新增 /v1/embeddings 和 /rerank 端点纯透传+按池路由。不做协议转换，RAG 场景刚需。",
     sources:["newapi"], mods:["proxy/server","proxy/protocol"],
-    benefit:"覆盖 RAG 开发者流量" ],
-  { id:17, priority:"P1", title:"完整备份/迁移 + 自动备份轮换",
-    desc:"一键导出/导入 gateway.db + credentials.vault.json，含密钥串迁移提示。保留最近 N 份自动备份。解决换机痛点。",
+    benefit:"覆盖 RAG 开发者流量" },
+  { id:17, priority:"P1", title:"完整备份/迁移 + 自动备份轮换", done:false,
+    desc:"一键导出/导入 gateway.db + credentials.vault.json，含密钥串迁移提示。当前自动备份仅每7天一次且首次使用一周内无保护——2026-08-26 已发生真实数据丢失（卸载后 credentials.vault.json 丢失，27个供应商+24个账号凭证需重新添加）。需改为启动时立即备份+更多保留份数+UI手动备份入口。与 #25 自动备份增强互补。",
     sources:["sub2api","ccswitch"], mods:["commands","services/export"],
-    benefit:"README 里的手工迁移步骤变成一键操作" ],
+    benefit:"README 里的手工迁移步骤变成一键操作" },
   { id:18, priority:"P1", title:"Deep Link 导入",
     desc:"通过 poolgate:// URL 一键导入账号配置/密钥/池配置，方便团队内分发「接入包」。Tauri 有 deep-link 插件。",
     sources:["ccswitch"], mods:["commands/deeplink","services/import"],
-    benefit:"配置分享一步到位" ],
+    benefit:"配置分享一步到位" },
+  { id:26, priority:"P1", title:"菜单栏 NSImage Template 自动适配", done:true,
+    desc:"macOS 菜单栏 Logo 已切换为 NSImage template 模式，由 AppKit 根据菜单栏状态项的实际有效外观自动切换黑/白，不再依赖主窗口 theme 读取。四态彩色状态点通过原生 attributedTitle 富文本表达，避免被 Template 一并染色。新增 objc2-app-kit 依赖。",
+    sources:["ccswitch"], mods:["services/menu_bar","Cargo.toml"],
+    benefit:"彻底解决深浅菜单栏外观切换不准确的问题" },
+  { id:27, priority:"P1", title:"账号/供应商列表智能排序", done:true,
+    desc:"供应商列表：启用状态优先、最新创建在前、禁用沉底。账号列表：启用 provider 的账号优先、异常/禁用/额度耗尽账号沉底。两者都使用 rowid 打破 CURRENT_TIMESTAMP 秒级精度的并列。",
+    sources:["cockpit"], mods:["db/accounts","db/providers"],
+    benefit:"多供应商混池场景下快速定位活跃账号" },
+  { id:28, priority:"P1", title:"Token Monitor 工具安装检测", done:true,
+    desc:"ToolCollectorState 新增 installed 字段，tool_is_installed() 通过 CLI 路径探测+数据目录扫描判断工具是否真实安装在本机。自定义工具始终标记为已安装。",
+    sources:["cockpit"], mods:["token_monitor/detect","token_monitor/model"],
+    benefit:"区分「监控中」和「未安装」状态，避免误报" },
+
+
 
   // ═══ P2 ═══
   { id:19, priority:"P2", title:"SSRF 防护 / 上游 URL 白名单",
     desc:"局域网共享模式下：禁止 Base URL 指向私网/回环地址、强制 HTTPS 可选项。sub2api 的 url_allowlist 设计可直接参考思路。",
     sources:["sub2api"], mods:["proxy/auth","services/import"],
-    benefit:"防止 Base URL 被指向内网" ],
+    benefit:"防止 Base URL 被指向内网" },
   { id:20, priority:"P2", title:"缓存命中率面板",
     desc:"迁移 021 已拆 cache_read/write，Analytics 页展示缓存命中率趋势——几乎零后端成本。",
     sources:["newapi"], mods:["pages/Analytics","db/logs"],
-    benefit:"让用户看到缓存节省了多少 token" ],
+    benefit:"让用户看到缓存节省了多少 token" },
   { id:21, priority:"P2", title:"更新检查",
     desc:"桌面端「检测新版本」提示，基于 Tauri updater 插件。不做自动升级，只做提醒。",
     sources:["sub2api"], mods:["services/updater"],
-    benefit:"用户不用手动关注 GitHub Releases" ],
+    benefit:"用户不用手动关注 GitHub Releases" },
   { id:22, priority:"P2", title:"MCP / Skills 统一管理",
     desc:"跨工具双向同步 MCP 配置。体量大、偏离网关主线，建议作为独立插件页或远期项。",
     sources:["ccswitch"], mods:["pages/MCP","services/mcp_sync"],
-    benefit:"从网关升级为本地 AI 工作台控制中心" ],
+    benefit:"从网关升级为本地 AI 工作台控制中心" },
   { id:23, priority:"P2", title:"Agent Identity 动态签名（研究项）",
     desc:"研究 openai/codex 的 Ed25519 agent 注册协议，按账号生成/导入 agent 身份并签名请求。收益最大但工程量和逆向维护成本也最大。",
     sources:["sub2api"], mods:["proxy/codex_adapter"],
-    benefit:"请求来自合法注册的 agent runtime，指纹伪装最深" ],
+    benefit:"请求来自合法注册的 agent runtime，指纹伪装最深" },
   { id:24, priority:"P2", title:"唤醒任务",
     desc:"定时轻量请求提前触发配额重置周期。有明确 ToS 风险，如做必须默认关闭并强提示。",
     sources:["cockpit"], mods:["token_monitor/quota"],
@@ -246,6 +269,8 @@ const DATA = [
 // ── state ──
 const STORAGE_KEY = "pg_checklist_done";
 let doneSet = new Set(JSON.parse(localStorage.getItem(STORAGE_KEY)||"[]"));
+// Merge hardcoded done:true from DATA (code-level completed items) into doneSet
+DATA.filter(d => d.done).forEach(d => doneSet.add(d.id));
 let activePriority = "all", activeSource = "all";
 
 function save() { localStorage.setItem(STORAGE_KEY, JSON.stringify([...doneSet])); }
