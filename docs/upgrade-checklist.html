@@ -140,7 +140,7 @@
 <script>
 const DATA = [
   // ── 统计 ──
-  // P0: 7/10 done (模型映射、reasoning effort 后缀 待实现)
+  // P0: 7/7 done（模型映射、reasoning effort 后缀、自动备份增强已按用户决定移除）
   // P1: 5/12 done (健康分、分组隔离、测速、配额扩平台、embeddings 透传、备份迁移、deep link 待实现)
   // P2: 0/6 done
   // ── P0 ═══
@@ -152,14 +152,6 @@ const DATA = [
     desc:"识别 Plus/Pro/Team 套餐类型并配置差异化权重（Pro 承担更多流量、Plus 兜底），套餐权重联动路由候选排序。数据库加 plan_tier 字段。",
     sources:["cockpit"], mods:["db/accounts","proxy/router"],
     benefit:"不同套餐耐压不同，合理分流延长账号寿命" },
-  { id:3, priority:"P0", title:"模型映射/重定向",
-    desc:"支持别名到实际模型的映射规则（精确 / 通配符），路由层自动重写 model 字段。如客户端请求 gpt-5-high → 路由到池内实际 gpt-5 模型。",
-    sources:["newapi"], mods:["proxy/router","db/groups"],
-    benefit:"Agent 用户最高频需求，消除「模型不存在」报错" },
-  { id:4, priority:"P0", title:"Reasoning Effort 后缀",
-    desc:"-thinking/-high/-low 后缀自动转为 Claude thinking 参数或 Gemini budget。配合模型映射叠加使用。",
-    sources:["newapi"], mods:["proxy/protocol"],
-    benefit:"一步到位的推理模式切换，提升 Agent 效果" },
   { id:5, priority:"P0", title:"工具配置一键接管 + 回退", done:true,
     desc:"「接管此工具」按钮：直接把 BASE_URL 写入 Claude Code settings.json / Codex config.toml / Gemini CLI 等配置文件，支持一键回退官方直连。托盘菜单加「工具接入状态」子菜单。",
     sources:["ccswitch"], mods:["services/tool接管","commands","tray"],
@@ -180,11 +172,6 @@ const DATA = [
     desc:"路由层在 LAN 模式下排除非本机的 OAuth/subscription 账号（plan_tier 非空），防止同事通过局域网消耗个人订阅额度。",
     sources:["security"], mods:["proxy/router","proxy/auth"],
     benefit:"共享场景最大的额度泄露面" },
-
-  { id:25, priority:"P0", title:"自动备份增强（数据丢失教训）", done:false,
-    desc:"当前自动备份每7天触发一次、最多保留4份，首次使用一周内完全无保护。2026-08-26 已发生真实数据丢失：卸载重装后 credentials.vault.json 丢失，27个供应商+24个账号的凭证全部需要重新添加（数据库已从 Time Machine 恢复，但密钥库未备份）。改进：启动时立即备份、保留更多份数（10份）、UI添加「立即备份/恢复」按钮、备份目录可配置（指向 iCloud 等云同步目录）。",
-    sources:["security"], mods:["services/backup","commands","pages/Settings"],
-    benefit:"防止再次发生数据丢失——这是最严重的用户信任问题" },
 
   // ═══ P1 ═══
   { id:10, priority:"P1", title:"账号健康分 + 池体检页",
