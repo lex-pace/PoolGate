@@ -161,15 +161,15 @@ fn usage_object(metrics: &serde_json::Value) -> Option<&serde_json::Value> {
 /// metrics.context.model 或 providerData.model；这里统一兼容，不按具体模型白名单过滤。
 fn model_from_value(value: &serde_json::Value) -> Option<String> {
     [
+        "/requestModelId",
+        "/requestModelName",
+        "/providerData/requestModelId",
+        "/providerData/requestModelName",
         "/context/model",
         "/model",
         "/modelId",
         "/model_id",
-        "/requestModelId",
-        "/requestModelName",
         "/providerData/model",
-        "/providerData/requestModelId",
-        "/providerData/requestModelName",
     ]
     .iter()
     .find_map(|path| {

@@ -344,12 +344,17 @@ export default function Wizard({ onComplete }: Props) {
 
               <Input label="服务商名称" value={providerName} onChange={(e) => setProviderName(e.target.value)} placeholder="如: 我的中转站 / OpenAI 官方" />
               <Input label="Base URL" value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} />
-              <Input
-                label="模型列表（可选，逗号分隔）"
-                value={modelsText}
-                onChange={(e) => setModelsText(e.target.value)}
-                placeholder="如: gpt-4o, claude-sonnet-4-5（留空则下一步自动从上游获取）"
-              />
+              <div>
+                <div className="text-xs mb-1.5" style={{ color: "var(--text-dim)" }}>模型列表（可选，逗号分隔）</div>
+                <textarea
+                  value={modelsText}
+                  onChange={(e) => setModelsText(e.target.value)}
+                  rows={2}
+                  placeholder="如: gpt-4o, claude-sonnet-4-5（留空则下一步自动从上游获取）"
+                  className="w-full min-h-[48px] max-h-[160px] px-3 py-2 rounded-md border text-sm font-mono leading-5 outline-none resize-y"
+                  style={{ backgroundColor: "var(--bg-elevated)", borderColor: "var(--border-default)", color: "var(--text-primary)" }}
+                />
+              </div>
 
               <div>
                 <div className="text-xs mb-1.5" style={{ color: "var(--text-dim)" }}>API Key（每行一个，支持「名称=密钥」）</div>
