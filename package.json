@@ -8,7 +8,14 @@
   "bugs": {
     "url": "https://github.com/lex-pace/PoolGate/issues"
   },
-  "keywords": ["tauri", "react", "rust", "local-gateway", "llm", "token-monitor"],
+  "keywords": [
+    "tauri",
+    "react",
+    "rust",
+    "local-gateway",
+    "llm",
+    "token-monitor"
+  ],
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -39,7 +46,7 @@
     "lucide-react": "^0.400",
     "react": "^18.3",
     "react-dom": "^18.3",
-    "recharts": "^2",
+    "recharts": "^2.15.4",
     "tailwind-merge": "^2",
     "tailwindcss": "^4"
   },
