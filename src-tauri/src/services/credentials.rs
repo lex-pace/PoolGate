@@ -84,7 +84,7 @@ pub fn api_key_secret(account: &Account) -> Result<String, String> {
         .api_key
         .filter(|value| !value.trim().is_empty())
         .or_else(|| {
-            (account.credential_type.as_deref().unwrap_or("api_key") == "api_key"
+            (matches!(account.credential_type.as_deref().unwrap_or("api_key"), "api_key" | "upstream_key" | "gemini_api_key")
                 && !account.api_key.trim().is_empty())
             .then(|| account.api_key.clone())
         })

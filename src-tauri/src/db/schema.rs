@@ -158,6 +158,12 @@ pub fn run_migrations(
         tracing::info!("Database migrated to version 21 (request_logs cache split)");
     }
 
+    if current_version < 24 {
+        conn.execute_batch(include_str!("../../migrations/024_credential_store.sql"))?;
+        conn.pragma_update(None, "user_version", 24)?;
+        tracing::info!("Database migrated to version 24 (credential store)");
+    }
+
     Ok(())
 }
 
@@ -176,7 +182,7 @@ mod token_monitor_migrations {
         let version: i32 = conn
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .expect("user_version");
-        assert_eq!(version, 21, "user_version should reach 21");
+        assert_eq!(version, 24, "user_version should reach 24");
 
         // 021: request_logs cache split columns exist.
         let cache_read: i64 = conn

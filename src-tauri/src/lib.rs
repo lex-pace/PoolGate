@@ -120,11 +120,11 @@ pub fn run() {
             // captured to disk.
             init_logging(&poolgate_dir.join("logs"));
 
-            services::keychain::initialize_vault(poolgate_dir.join("credentials.vault.json"))?;
-
             let db_path = poolgate_dir.join("gateway.db");
             let database = db::Database::new(&db_path)?;
             database.run_migrations()?;
+            services::keychain::initialize_with_db(&db_path)?;
+            services::keychain::initialize_vault(poolgate_dir.join("credentials.vault.json"))?;
 
             // Ordinary application launch performs no credential-vault I/O.
             // Historical plaintext migration and optional gateway-key loading
@@ -295,6 +295,7 @@ pub fn run() {
             commands::provider_commands::create_provider,
             commands::provider_commands::update_provider,
             commands::provider_commands::delete_provider,
+            commands::provider_commands::get_provider_api_keys,
             commands::provider_commands::test_provider_connection,
             commands::provider_commands::test_account_connection,
             commands::provider_commands::test_account_connection,
