@@ -733,6 +733,10 @@ export function deleteProvider(id: string): Promise<void> {
   return invoke("delete_provider", { id });
 }
 
+export function getProviderApiKeys(providerId: string): Promise<string[]> {
+  return invoke("get_provider_api_keys", { providerId });
+}
+
 export function testProviderConnection(providerId: string): Promise<ProviderTestResult> {
   return invoke("test_provider_connection", { providerId });
 }

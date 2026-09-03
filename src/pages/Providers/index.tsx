@@ -10,6 +10,7 @@ import {
   useUpdateAccount,
   useDeleteAccount,
 } from "@/hooks/use-tauri";
+import { getProviderApiKeys } from "@/lib/tauri-commands";
 import type { Provider, ProviderTestResult, Account } from "@/lib/tauri-commands";
 import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
@@ -299,6 +300,7 @@ export default function ProvidersPage() {
   const [headerEntries, setHeaderEntries] = useState<HeaderEntry[]>([]);
   const [headersJsonMode, setHeadersJsonMode] = useState(false);
   const [keyEntries, setKeyEntries] = useState<KeyEntry[]>([]);
+  const [keysLoading, setKeysLoading] = useState(false);
   const [existingPrompt, setExistingPrompt] = useState<Provider | null>(null);
 
   // Template picker state
@@ -471,6 +473,7 @@ export default function ProvidersPage() {
     setHeaderEntries([]);
     setHeadersJsonMode(false);
     setKeyEntries([]);
+    setKeysLoading(false);
     setExistingPrompt(null);
     setEditing(null);
   };
@@ -489,12 +492,15 @@ export default function ProvidersPage() {
     } catch {
       useJsonMode = true;
     }
+    const providerKeys = parseApiKeys(p.api_keys);
+    const initialEntries = buildKeyEntriesFromProvider(p);
+    setKeyEntries(initialEntries);
     setForm({
       name: p.name,
       type: p.type,
       base_url: p.base_url,
       protocol: p.protocol,
-      api_keys: p.api_keys || "",
+      api_keys: stringifyApiKeys(providerKeys),
       proxy_url: p.proxy_url || "",
       custom_headers: p.custom_headers || "",
       timeout_ms: p.timeout_ms || 30000,
@@ -502,31 +508,72 @@ export default function ProvidersPage() {
     });
     setHeaderEntries(parsedHeaders);
     setHeadersJsonMode(useJsonMode);
-    loadKeyEntries(p);
+    setKeysLoading(initialEntries.length === 0);
+    if (initialEntries.length === 0) {
+      void getProviderApiKeys(p.id).then((keys) => {
+        setKeysLoading(false);
+        if (keys.length === 0) return;
+        setKeyEntries(keys.map((value) => ({
+          ...createKeyEntry(value, ""),
+          reveal: true,
+        })));
+      }).catch((error) => {
+        setKeysLoading(false);
+        setFormError(`读取 API Key 失败: ${error instanceof Error ? error.message : String(error)}`);
+      });
+    }
     setFormError("");
     setEditing(p);
     setModalMode("manual");
     setModalOpen(true);
   };
 
-  const loadKeyEntries = (p: Provider) => {
+  /**
+   * Build initial key entries from the provider row's api_keys field.
+   * Names are matched from provider_key accounts by slot index when possible.
+   * Defaults to reveal:true so existing keys are immediately visible on edit.
+   */
+  const buildKeyEntriesFromProvider = (p: Provider): KeyEntry[] => {
     const values = parseApiKeys(p.api_keys);
+    if (values.length === 0) return [];
+
+    // Try to match names from provider_key accounts by slot index
     const slotByName = new Map<number, string>();
     (accounts ?? [])
       .filter((a) => a.provider_id === p.id && a.source_format === "provider_key")
       .forEach((a) => {
         const slot = Number.parseInt((a.external_account_id ?? "").split(":").pop() ?? "", 10);
-        if (Number.isInteger(slot)) slotByName.set(slot, a.name ?? "");
+        if (Number.isInteger(slot) && a.name) {
+          slotByName.set(slot, a.name);
+        }
       });
-    const count = Math.max(values.length, slotByName.size);
-    const entries: KeyEntry[] = [];
-    for (let i = 0; i < count; i += 1) {
-      const value = values[i] ?? "";
-      const name = slotByName.get(i) ?? "";
-      if (!value && !name) continue;
-      entries.push(createKeyEntry(value, name));
-    }
-    setKeyEntries(entries);
+
+    return values.map((value, i) => ({
+      ...createKeyEntry(value, slotByName.get(i) ?? ""),
+      reveal: true,
+    }));
+  };
+
+  const handleReloadKeys = () => {
+    if (!editing) return;
+    setKeysLoading(true);
+    getProviderApiKeys(editing.id)
+      .then((keys) => {
+        setKeysLoading(false);
+        if (keys.length === 0) return;
+        setKeyEntries((current) => {
+          const existingByName = new Map(current.map((e) => [e.value, e.name]));
+          return keys.map((value) => ({
+            ...createKeyEntry(value, existingByName.get(value) ?? ""),
+            reveal: true,
+          }));
+        });
+      })
+      .catch((error) => {
+        setKeysLoading(false);
+        console.error("Failed to reload provider API keys", error);
+        setFormError(`读取 API Key 失败: ${error instanceof Error ? error.message : String(error)}`);
+      });
   };
 
   const updateHeaderEntry = (id: string, field: "name" | "value", value: string) => {
@@ -1527,15 +1574,34 @@ export default function ProvidersPage() {
                   每个 key 自动生成一个账号并轮询使用
                 </span>
               </span>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setKeyEntries((entries) => [...entries, createKeyEntry()])}
-              >
-                <Plus size={14} /> 添加 Key
-              </Button>
+              <div className="flex items-center gap-1">
+                {editing && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={handleReloadKeys}
+                    disabled={keysLoading}
+                    title="从凭据库重新加载"
+                  >
+                    <RefreshCw size={13} className={keysLoading ? "animate-spin" : ""} />
+                  </Button>
+                )}
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setKeyEntries((entries) => [...entries, createKeyEntry()])}
+                >
+                  <Plus size={14} /> 添加 Key
+                </Button>
+              </div>
             </div>
-            {keyEntries.length === 0 ? (
+            {keysLoading ? (
+              <div className="flex items-center justify-center py-4"
+                style={{ color: "var(--text-dim)" }}>
+                <Spinner size={16} />
+                <span className="ml-2 text-xs">正在从凭据库读取 API Key…</span>
+              </div>
+            ) : keyEntries.length === 0 ? (
               <div className="rounded-md border border-dashed px-3 py-3 text-center text-xs"
                 style={{ borderColor: "var(--border-default)", color: "var(--text-dim)" }}>
                 暂无 API Key。点击「添加 Key」为该供应商配置一个或多个 key。
@@ -1582,6 +1648,7 @@ export default function ProvidersPage() {
                         />
                         <button
                           type="button"
+                          title={entry.reveal ? "隐藏" : "显示明文"}
                           onClick={() =>
                             setKeyEntries((entries) =>
                               entries.map((x) => (x.id === entry.id ? { ...x, reveal: !x.reveal } : x)),

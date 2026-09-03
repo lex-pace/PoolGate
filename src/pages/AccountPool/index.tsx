@@ -41,7 +41,7 @@ import {
   resourceCategoryForTemplate,
   type ModelResourceCategory,
 } from "@/lib/model-resource-templates";
-import { exportAccount, type Account, type Provider, type QuotaWindow } from "@/lib/tauri-commands";
+import { exportAccount, getProviderApiKeys, type Account, type Provider, type QuotaWindow } from "@/lib/tauri-commands";
 import { save } from "@tauri-apps/plugin-dialog";
 import { writeTextFile } from "@tauri-apps/plugin-fs";
 import {
@@ -333,6 +333,8 @@ export default function ModelResources() {
   const [draftBaseUrl, setDraftBaseUrl] = useState<string | null>(null);
   const [deletingAccount, setDeletingAccount] = useState<Account | null>(null);
   const [batchDeleteConfirmOpen, setBatchDeleteConfirmOpen] = useState(false);
+  const [loadedApiKeys, setLoadedApiKeys] = useState<Record<string, string>>({});
+  const [apiKeyLoading, setApiKeyLoading] = useState(false);
   const handleSave = async () => {
     const base = resources.find((r) => r.account.id === expanded);
     if (!base) return;
@@ -923,6 +925,24 @@ export default function ModelResources() {
                   setShowApiKey(false);
                   setDraft(null);
                   setDraftBaseUrl(null);
+                  // Async load API Key from credential store
+                  if (account.provider_id && !loadedApiKeys[account.id]) {
+                    setApiKeyLoading(true);
+                    getProviderApiKeys(account.provider_id)
+                      .then((keys) => {
+                        setApiKeyLoading(false);
+                        if (keys.length > 0) {
+                          setLoadedApiKeys((prev) => ({ ...prev, [account.id]: keys[0] }));
+                          if (draft?.id === account.id) {
+                            setDraft({ ...(draft as Account), api_key: keys[0] });
+                          }
+                        }
+                      })
+                      .catch((err) => {
+                        setApiKeyLoading(false);
+                        console.error("Failed to load API key:", err);
+                      });
+                  }
                 }
               };
 
@@ -1062,7 +1082,7 @@ export default function ModelResources() {
                       <button type="button" className="pg-card-action" title={getTestResultTooltip(account.id)} disabled={testingAccountId === account.id} onClick={(event) => { event.stopPropagation(); void handleTestAccount(account); }}>
                         {testingAccountId === account.id ? <Spinner className="h-3.5 w-3.5" /> : getTestResultIcon(account.id) || <Zap size={14} />}
                       </button>
-                      <button type="button" className="pg-card-action" title="编辑资源" onClick={(event) => { event.stopPropagation(); setDraft({ ...account }); setDraftBaseUrl(connector?.base_url ?? null); setExpanded(account.id); setEditing(true); }}><Pencil size={14} /></button>
+                      <button type="button" className="pg-card-action" title="编辑资源" onClick={(event) => { event.stopPropagation(); setDraft({ ...account }); setDraftBaseUrl(connector?.base_url ?? null); setExpanded(account.id); setEditing(true); setShowApiKey(false); if (account.provider_id && !loadedApiKeys[account.id]) { setApiKeyLoading(true); getProviderApiKeys(account.provider_id).then((keys) => { setApiKeyLoading(false); if (keys.length > 0) { setLoadedApiKeys((prev) => ({ ...prev, [account.id]: keys[0] })); setDraft((prev) => prev ? { ...prev, api_key: keys[0] } : prev); } }).catch((err) => { setApiKeyLoading(false); console.error("Failed to load API key:", err); }); } }}><Pencil size={14} /></button>
                       <button type="button" className="pg-card-action" title="刷新 Token" disabled={refreshToken.isPending} onClick={(event) => { event.stopPropagation(); void refreshToken.mutateAsync(account.id); }}>
                         {refreshToken.isPending ? <Spinner className="h-3.5 w-3.5" /> : <Sparkles size={14} />}
                       </button>
@@ -1178,9 +1198,9 @@ export default function ModelResources() {
                           className="flex-1 rounded-md border px-2 py-1 text-[11px] font-mono"
                           style={{ borderColor: "var(--border-subtle)" }}
                           type={showApiKey ? "text" : "password"}
-                          value={draft?.api_key ?? account.api_key ?? ""}
+                          value={draft?.api_key ?? loadedApiKeys[account.id] ?? account.api_key ?? ""}
                           onChange={(e) => setDraft({ ...(draft ?? ({} as Account)), api_key: e.target.value } as Account)}
-                          placeholder="sk-..."
+                          placeholder={apiKeyLoading ? "正在读取 API Key…" : "sk-..."}
                         />
                         <button
                           type="button"
@@ -1211,12 +1231,12 @@ export default function ModelResources() {
                     )}
                     <div className="flex items-center justify-between gap-3">
                       <span className="text-[var(--text-dim)] shrink-0">模型 (逗号分隔)</span>
-                      <input
-                        className="flex-1 rounded-md border px-2 py-1 text-[11px]"
+                      <textarea
+                        rows={2}
+                        className="flex-1 min-h-[48px] max-h-[160px] resize-y rounded-md border px-2 py-1 text-[11px] font-mono leading-5"
                         style={{ borderColor: "var(--border-subtle)" }}
                         value={(() => {
                           const raw = draft?.models ?? account.models ?? "";
-                          // 显示为逗号分隔，而非原始 JSON 数组
                           try {
                             const parsed = JSON.parse(raw);
                             if (Array.isArray(parsed)) return parsed.join(", ");
@@ -1338,7 +1358,7 @@ export default function ModelResources() {
                 <button
                   className="flex items-center justify-center w-8 h-8 rounded-md text-[var(--color-brand)] hover:bg-[var(--color-brand)]/10 transition-colors"
                   title="编辑"
-                  onClick={() => { setDraft({ ...account }); setDraftBaseUrl(connector?.base_url ?? null); setEditing(true); }}
+                  onClick={() => { setDraft({ ...account }); setDraftBaseUrl(connector?.base_url ?? null); setEditing(true); setShowApiKey(false); if (account.provider_id && !loadedApiKeys[account.id]) { setApiKeyLoading(true); getProviderApiKeys(account.provider_id).then((keys) => { setApiKeyLoading(false); if (keys.length > 0) { setLoadedApiKeys((prev) => ({ ...prev, [account.id]: keys[0] })); setDraft((prev) => prev ? { ...prev, api_key: keys[0] } : prev); } }).catch((err) => { setApiKeyLoading(false); console.error("Failed to load API key:", err); }); } }}
                 ><Pencil size={15} /></button>
                 <button
                   className="flex items-center justify-center w-8 h-8 rounded-md text-[var(--color-ok)] hover:bg-[var(--color-ok)]/10 transition-colors disabled:opacity-40"

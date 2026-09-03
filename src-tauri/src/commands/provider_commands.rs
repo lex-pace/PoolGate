@@ -56,6 +56,97 @@ pub fn update_provider(state: State<'_, Arc<AppState>>, provider: Provider) -> R
         .map_err(|e| e.to_string())
 }
 
+/// Parse API keys from a raw string, supporting JSON array, newline-separated,
+/// and comma-separated formats.  Mirrors the frontend `parseApiKeys` helper.
+fn parse_api_keys_raw(raw: &str) -> Vec<String> {
+    let s = raw.trim();
+    if s.is_empty() {
+        return Vec::new();
+    }
+    if s.starts_with('[') {
+        if let Ok(parsed) = serde_json::from_str::<Vec<String>>(s) {
+            let cleaned: Vec<String> = parsed
+                .into_iter()
+                .map(|k| k.trim().to_string())
+                .filter(|k| !k.is_empty())
+                .collect();
+            if !cleaned.is_empty() {
+                return cleaned;
+            }
+        }
+    }
+    s.split(|c: char| c == '\n' || c == ',')
+        .map(|part| part.trim().to_string())
+        .filter(|part| !part.is_empty())
+        .collect()
+}
+
+#[tauri::command]
+pub async fn get_provider_api_keys(
+    state: State<'_, Arc<AppState>>,
+    provider_id: String,
+) -> Result<Vec<String>, String> {
+    let mut keys: Vec<String> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    // Source 1: provider.api_keys (supports JSON / newline / comma formats)
+    if let Ok(Some(provider)) = state.db.providers.get_by_id(&state.db.conn, &provider_id) {
+        if let Some(raw) = provider.api_keys.as_ref() {
+            for key in parse_api_keys_raw(raw) {
+                if seen.insert(key.clone()) {
+                    keys.push(key);
+                }
+            }
+        }
+    }
+
+    // Source 2: directly query credential_store via the main DB connection
+    // (bypasses keychain module to avoid any connection-initialization issues)
+    if let Ok(accounts) = state.db.accounts.list_all(&state.db.conn) {
+        for account in accounts
+            .into_iter()
+            .filter(|a| a.provider_id.as_deref() == Some(provider_id.as_str()))
+        {
+            // Try secret_ref → credential_store → parse api_key
+            if let Some(secret_ref) = &account.secret_ref {
+                let conn = state.db.conn.lock().map_err(|e| e.to_string())?;
+                let result = conn.query_row(
+                    "SELECT credential FROM credential_store WHERE secret_ref=?1",
+                    rusqlite::params![secret_ref],
+                    |row| row.get::<_, Vec<u8>>(0),
+                );
+                if let Ok(bytes) = result {
+                    if let Ok(payload) = serde_json::from_slice::<serde_json::Value>(&bytes) {
+                        if let Some(api_key) = payload.get("api_key").and_then(|v| v.as_str()) {
+                            if !api_key.trim().is_empty() && seen.insert(api_key.to_string()) {
+                                keys.push(api_key.to_string());
+                            }
+                        }
+                    }
+                }
+                continue;
+            }
+            // Fallback: inline credential_data
+            if let Some(data) = &account.credential_data {
+                if let Ok(payload) = serde_json::from_str::<serde_json::Value>(data) {
+                    if let Some(api_key) = payload.get("api_key").and_then(|v| v.as_str()) {
+                        if !api_key.trim().is_empty() && seen.insert(api_key.to_string()) {
+                            keys.push(api_key.to_string());
+                        }
+                    }
+                }
+                continue;
+            }
+            // Fallback: direct api_key field
+            if !account.api_key.trim().is_empty() && seen.insert(account.api_key.clone()) {
+                keys.push(account.api_key.clone());
+            }
+        }
+    }
+
+    Ok(keys)
+}
+
 #[tauri::command]
 pub fn delete_provider(state: State<'_, Arc<AppState>>, id: String) -> Result<(), String> {
     state
@@ -282,11 +373,16 @@ pub async fn test_provider_connection(
         .get_by_id(&state.db.conn, &provider_id)?
         .ok_or_else(|| "Provider not found".to_string())?;
 
-    // Get the first API key
+    // Prefer the provider's legacy key list, then recover the first
+    // account from the credential store (any source_format).
+    // Provider rows created by the secure account flow intentionally keep api_keys empty.
     let api_key = provider.api_keys.as_ref().and_then(|keys| {
-        serde_json::from_str::<Vec<String>>(keys)
-            .ok()
+        serde_json::from_str::<Vec<String>>(keys).ok()
             .and_then(|k| k.into_iter().find(|k| !k.trim().is_empty()))
+    }).or_else(|| {
+        state.db.accounts.list_all(&state.db.conn).ok()?.into_iter()
+            .find(|account| account.provider_id.as_deref() == Some(provider_id.as_str()))
+            .and_then(|account| crate::services::credentials::api_key_secret(&account).ok())
     });
 
     let api_key = match api_key {
