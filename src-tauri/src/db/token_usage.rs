@@ -323,7 +323,21 @@ fn range_boundary(range: &str) -> String {
 /// atomcode / 自定义应用 等「tokscale 不覆盖、只能靠 usage_event 统计」的工具。
 /// 清单为编译期常量，无注入风险。
 fn companion_tool_condition(alias: &str) -> String {
-    let ids = crate::token_monitor::collector::tokscale::covered_tool_ids();
+    companion_tool_condition_excluding(alias, &std::collections::HashSet::new())
+}
+
+/// 同上，但额外排除 `extra` 中的 tool_id——用于「本次 period 快照里实际出现的
+/// 工具」：老版 tokscale 二进制覆盖清单外的 client（如 dsh/mcode）一旦进入快照，
+/// 其权威口径已在快照里，usage_event 侧再叠加就是双算（今日 Tokens 虚高的根因）。
+fn companion_tool_condition_excluding(
+    alias: &str,
+    extra: &std::collections::HashSet<String>,
+) -> String {
+    let mut ids: std::collections::BTreeSet<String> =
+        crate::token_monitor::collector::tokscale::covered_tool_ids()
+            .into_iter()
+            .collect();
+    ids.extend(extra.iter().cloned());
     let quoted: Vec<String> = ids.iter().map(|id| format!("'{id}'")).collect();
     if quoted.is_empty() {
         format!("{alias}.tool_id != 'tokscale_aggregate'")
@@ -333,6 +347,27 @@ fn companion_tool_condition(alias: &str) -> String {
             quoted.join(",")
         )
     }
+}
+
+/// 该 range 的 tokscale period 快照里实际出现的工具 tool_id 集合（无快照返回空集）。
+fn snapshot_client_tool_ids(
+    conn: &Mutex<Connection>,
+    range: &str,
+) -> std::collections::HashSet<String> {
+    let Some(snap) = period_snapshot_json(conn, range) else {
+        return std::collections::HashSet::new();
+    };
+    let Some(entries) = snap.get("entries").and_then(|v| v.as_array()) else {
+        return std::collections::HashSet::new();
+    };
+    entries
+        .iter()
+        .map(|e| {
+            let client = e.get("client").and_then(|v| v.as_str()).unwrap_or("");
+            crate::token_monitor::collector::tokscale::tool_id_for_client(client)
+        })
+        .filter(|tool_id| !tool_id.is_empty())
+        .collect()
 }
 
 /// companion 工具过滤 SQL 片段（usage_event 的 `unified` CTE 口径）。
@@ -350,6 +385,9 @@ pub(crate) fn display_name_for_tool(tool_id: &str) -> String {
         "cursor" => "Cursor".to_string(),
         "github_copilot" => "GitHub Copilot".to_string(),
         "mimo" => "MiMo Code".to_string(),
+        "mcode" => "MiMo Code CLI".to_string(),
+        "micode-desktop" => "MiMo Code Desktop".to_string(),
+        "dsh" => "DeepSeek Harness".to_string(),
         "zcode" => "ZCode".to_string(),
         "codebuddy" => "CodeBuddy".to_string(),
         "antigravity" => "Antigravity".to_string(),
@@ -472,6 +510,57 @@ impl UsageEventRepo {
         Self::rebuild_rollup_locked(&tx)?;
         tx.commit().map_err(|e| e.to_string())?;
         Ok(())
+    }
+
+    /// 把历史行里「渠道包内部代号」形式的 `model_normalized` 归一到真实模型名。
+    ///
+    /// 背景：DSH 渠道包（dsh-our-free-model）用代号向上游请求（`dfmodel` = DeepSeek-Flash），
+    /// 代号会原样写进 DSH 会话文件并被采集入库。`alias_model` 修正后只影响**新写入**的
+    /// 行（指纹不含模型名，旧行不会被重扫覆盖），因此需要一次性回填历史行，否则模型卡片
+    /// 会同时出现 `dfmodel` 与新名两份。
+    ///
+    /// 幂等：无待修行时返回 0；有变更时同步重建 rollup（趋势按模型拆分的口径一致）。
+    pub fn backfill_channel_pack_aliases(&self, conn: &Mutex<Connection>) -> Result<usize, String> {
+        // 待修代号清单：只取 dialias 表里有真实名的（编译期常量，无注入风险）。
+        const CODE_NAMES: &[&str] = &[
+            "dfmodel",
+            "dmodel",
+            "qfmodel",
+            "q37fmodel",
+            "qmodel",
+            "qmodel_latest",
+            "qmodel_38max",
+            "gmodel",
+            "gfmodel",
+            "gm51model",
+            "kmodel",
+            "kmodel_latest",
+            "mmodel",
+        ];
+        let conn = conn.lock().map_err(|e| e.to_string())?;
+        let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+        let mut fixed = 0usize;
+        for code in CODE_NAMES {
+            let Some(canonical) = normalization::alias_model(code) else {
+                continue;
+            };
+            if canonical.eq_ignore_ascii_case(code) {
+                continue;
+            }
+            let n = tx
+                .execute(
+                    "UPDATE usage_event SET model_normalized = ?1 \
+                     WHERE lower(trim(model_normalized)) = ?2",
+                    rusqlite::params![canonical, code],
+                )
+                .map_err(|e| e.to_string())?;
+            fixed += n;
+        }
+        if fixed > 0 {
+            Self::rebuild_rollup_locked(&tx)?;
+        }
+        tx.commit().map_err(|e| e.to_string())?;
+        Ok(fixed)
     }
 
     /// 批量写入本地工具事件（幂等：按 `source_fingerprint` `INSERT OR IGNORE`）。
@@ -618,7 +707,7 @@ impl UsageEventRepo {
     /// **day|7d|month**：优先使用 tokscale 权威 period 快照（`--today/--week/--month`，
     /// 按消息真实时间逐日归因——避免 usage_event 里「会话生命周期累计值」按最后活跃日
     /// 归因导致的今日虚高），并叠加 tokscale 未覆盖的 companion 工具
-    /// （freebuff/atomcode/dsh/自定义应用）的 usage_event 用量；快照缺失时回退
+    /// （freebuff/atomcode/自定义应用）的 usage_event 用量；快照缺失时回退
     /// usage_event 聚合。
     /// **total**：始终走 usage_event（全量口径无窗口，usage_event 即权威）。
     pub fn unified_range_stats(
@@ -650,11 +739,13 @@ impl UsageEventRepo {
     }
 
     /// companion 工具（tokscale 未覆盖 + 自定义应用）在范围内的 usage_event 聚合。
+    /// 本范围 period 快照里实际出现的工具一并排除（快照已含其权威口径，再叠加即双算）。
     fn companion_range_stats(
         &self,
         conn: &Mutex<Connection>,
         range: &str,
     ) -> Result<(i64, i64, i64, i64), String> {
+        let extra = snapshot_client_tool_ids(conn, range);
         let conn = conn.lock().map_err(|e| e.to_string())?;
         let sql = format!(
             "{UNIFIED_CTE}
@@ -662,7 +753,7 @@ impl UsageEventRepo {
                     COALESCE(SUM(cache_tokens),0), COALESCE(SUM(total_tokens),0)
              FROM unified WHERE {} AND {}",
             range_boundary(range),
-            companion_filter_sql(),
+            companion_tool_condition_excluding("unified", &extra),
         );
         conn.query_row(&sql, [], |row| {
             Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
@@ -733,12 +824,14 @@ impl UsageEventRepo {
         Ok(Self::aggregate_tool_groups(group_rows))
     }
 
-    /// companion 工具行：与 usage_event_tool_rows 同构，仅限定 tokscale 未覆盖工具。
+    /// companion 工具行：与 usage_event_tool_rows 同构，仅限定 tokscale 未覆盖工具
+    /// （并排除本范围快照里实际出现的工具，防双算）。
     fn companion_tool_rows(
         &self,
         conn: &Mutex<Connection>,
         range: &str,
     ) -> Result<Vec<ToolUsageRow>, String> {
+        let extra = snapshot_client_tool_ids(conn, range);
         let guard = conn.lock().map_err(|e| e.to_string())?;
         let sql = format!(
             "{UNIFIED_CTE}
@@ -754,7 +847,7 @@ impl UsageEventRepo {
              WHERE {} AND {}
              GROUP BY unified.tool_id, unified.model_normalized",
             range_boundary(range),
-            companion_filter_sql(),
+            companion_tool_condition_excluding("unified", &extra),
         );
         let group_rows = Self::query_tool_groups(&guard, &sql)?;
         drop(guard);
@@ -930,12 +1023,14 @@ impl UsageEventRepo {
             .collect())
     }
 
-    /// companion 工具模型行：与 usage_event_model_rows 同构，仅限定 tokscale 未覆盖工具。
+    /// companion 工具模型行：与 usage_event_model_rows 同构，仅限定 tokscale 未覆盖工具
+    /// （并排除本范围快照里实际出现的工具，防双算）。
     fn companion_model_rows(
         &self,
         conn: &Mutex<Connection>,
         range: &str,
     ) -> Result<Vec<ModelUsageRow>, String> {
+        let extra = snapshot_client_tool_ids(conn, range);
         let guard = conn.lock().map_err(|e| e.to_string())?;
         let sql = format!(
             "{UNIFIED_CTE}
@@ -946,7 +1041,7 @@ impl UsageEventRepo {
              FROM unified WHERE {} AND {}
              GROUP BY unified.model_normalized ORDER BY 5 DESC",
             range_boundary(range),
-            companion_filter_sql(),
+            companion_tool_condition_excluding("unified", &extra),
         );
         let raw_rows = Self::query_model_groups(&guard, &sql)?;
         drop(guard);
@@ -1147,7 +1242,7 @@ impl UsageEventRepo {
     ///
     /// 优先使用 tokscale graph 权威口径（按消息真实时间逐日归因，含按工具/按模型拆分、
     /// 活跃/连续/峰值/活跃时间/消息数），并叠加 tokscale 未覆盖的 companion 工具
-    /// （freebuff/atomcode/dsh/自定义应用）的逐日用量（tm_daily_rollup 按真实行时间
+    /// （freebuff/atomcode/自定义应用）的逐日用量（tm_daily_rollup 按真实行时间
     /// 落库，逐日准确）；tokscale 缺失/失败时回退 usage_event DB 聚合。
     pub fn trend_series(
         &self,
@@ -1181,7 +1276,7 @@ impl UsageEventRepo {
         use std::collections::{BTreeMap, HashMap};
         let conn = conn.lock().map_err(|e| e.to_string())?;
 
-        // companion = tokscale 未覆盖的工具（freebuff/atomcode/dsh/自定义应用），
+        // companion = tokscale 未覆盖的工具（freebuff/atomcode/自定义应用），
         // 事件按真实行时间落库，逐日归因准确。
         let sql = format!(
             "{UNIFIED_CTE}
@@ -2091,6 +2186,53 @@ mod tests {
         assert_eq!(claude_model.total_tokens, 100);
     }
 
+    /// 旧版 tokscale 二进制快照里出现「覆盖清单外」的 client（历史 bug：dsh/mcode
+    /// 未列清单）时，companion 叠加必须动态排除快照内实际出现的工具——否则同一
+    /// 用量既进快照又进 companion，今日 Tokens 双算虚高。
+    #[test]
+    fn day_snapshot_excludes_its_own_clients_from_companion_overlay() {
+        let db = test_db();
+        let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
+        // 「清单外 client」的 usage_event 行（模拟旧采集残留：mcode 会话累计 900）
+        let mut legacy = local_event("mcode", 900, 0, &now);
+        legacy.model_normalized = Some("minimax-m3.1-flash".into());
+        // 真 companion 工具行（freebuff，不在任何快照）
+        let mut fb = local_event("freebuff", 100, 0, &now);
+        fb.model_normalized = Some("freebuff-model".into());
+        UsageEventRepo
+            .insert_batch(&db, &[legacy, fb])
+            .expect("insert");
+
+        // day 快照含 claude（covered）+ mcode（清单外 client，但快照已给权威口径）
+        let snapshot_json = r#"{"groupBy":"client,session,model","entries":[
+            {"client":"claude","sessionId":"s1","model":"claude-3-5-sonnet","input":40,"output":20,"cacheRead":30,"cacheWrite":10,"cost":0.5},
+            {"client":"mcode","sessionId":"s2","model":"minimax-m3.1-flash","input":60,"output":30,"cacheRead":0,"cacheWrite":0,"cost":0.1}
+        ]}"#;
+        crate::db::settings::SettingsRepo
+            .set(&db, "tm.period.day", snapshot_json)
+            .expect("set day snapshot");
+
+        // 总量 = 快照 100+90 + freebuff 100 = 290；mcode 的 usage_event 行(900)不再叠加
+        let (_input, _output, _cache, total) = UsageEventRepo
+            .unified_range_stats(&db, "day")
+            .expect("day stats");
+        assert_eq!(total, 290, "快照内 client 的 usage_event 行不得二次叠加");
+
+        let rows = UsageEventRepo
+            .tool_usage_rows(&db, "day")
+            .expect("day tools");
+        let mcode_row = rows
+            .iter()
+            .find(|r| r.tool_id == "mcode")
+            .expect("mcode 行存在（快照口径）");
+        assert_eq!(mcode_row.total_tokens, 90, "只取快照口径，非快照+DB 之和");
+        let fb_row = rows
+            .iter()
+            .find(|r| r.tool_id == "freebuff")
+            .expect("freebuff companion 仍合并");
+        assert_eq!(fb_row.total_tokens, 100);
+    }
+
     /// 关闭监控（enabled=0）后：该工具及其模型的 TOKENS 从所有统计中剔除
     /// （总量/工具/模型），历史数据保留，重新开启即恢复。
     #[test]
@@ -2195,22 +2337,22 @@ mod tests {
         let today = chrono::Local::now().format("%Y-%m-%d").to_string();
         let yesterday = prev_local_day(&today);
         let two_days_ago = prev_local_day(&yesterday);
-        // companion（dsh）+ covered（claude_code）usage_event 行（不同时间避免指纹去重）
-        let mut dsh1 = local_event("dsh", 100, 0, &format!("{two_days_ago}T08:00:00Z"));
-        dsh1.model_normalized = Some("deepseek-v4-flash".into());
-        dsh1.total_tokens = Some(100);
-        let mut dsh1b = local_event("dsh", 100, 0, &format!("{two_days_ago}T08:30:00Z"));
-        dsh1b.model_normalized = Some("deepseek-v4-flash".into());
-        dsh1b.total_tokens = Some(100);
-        let mut dsh2 = local_event("dsh", 50, 0, &format!("{yesterday}T09:00:00Z"));
-        dsh2.model_normalized = Some("deepseek-v4-flash".into());
-        dsh2.total_tokens = Some(50);
+        // companion（freebuff）+ covered（claude_code）usage_event 行（不同时间避免指纹去重）
+        let mut fb1 = local_event("freebuff", 100, 0, &format!("{two_days_ago}T08:00:00Z"));
+        fb1.model_normalized = Some("deepseek-v4-flash".into());
+        fb1.total_tokens = Some(100);
+        let mut fb1b = local_event("freebuff", 100, 0, &format!("{two_days_ago}T08:30:00Z"));
+        fb1b.model_normalized = Some("deepseek-v4-flash".into());
+        fb1b.total_tokens = Some(100);
+        let mut fb2 = local_event("freebuff", 50, 0, &format!("{yesterday}T09:00:00Z"));
+        fb2.model_normalized = Some("deepseek-v4-flash".into());
+        fb2.total_tokens = Some(50);
         // covered 工具行：graph 权威，不应被合并
         let mut covered = local_event("claude_code", 9999, 0, &format!("{two_days_ago}T10:00:00Z"));
         covered.model_normalized = Some("claude-3-5-sonnet".into());
         covered.total_tokens = Some(9999);
         UsageEventRepo
-            .insert_batch(&db, &[dsh1, dsh1b, dsh2, covered])
+            .insert_batch(&db, &[fb1, fb1b, fb2, covered])
             .expect("insert usage events");
         // 模拟 tokscale graph 序列：昨天 + 今天只有 covered 工具用量（各 1000 tokens）
         let mut series = TrendSeries {
@@ -2260,7 +2402,7 @@ mod tests {
             .merge_companion_trend(&db, &mut series)
             .expect("merge");
 
-        // two_days_ago 是 companion 独有活跃日（2 条 dsh 行 → 200 tokens）→ 新增；
+        // two_days_ago 是 companion 独有活跃日（2 条 freebuff 行 → 200 tokens）→ 新增；
         // yesterday 合并 companion 用量
         assert_eq!(series.daily.len(), 3);
         let d_prev = series
@@ -2274,14 +2416,14 @@ mod tests {
             .as_ref()
             .unwrap()
             .iter()
-            .any(|s| s.key == "dsh"));
+            .any(|s| s.key == "freebuff"));
         let d_y = series
             .daily
             .iter()
             .find(|d| d.date == yesterday)
             .expect("yesterday");
         assert_eq!(d_y.tokens, 1050, "covered 1000 + companion 50");
-        // covered（claude_code 9999）不合并（graph 权威），two_days_ago 只有 dsh 200
+        // covered（claude_code 9999）不合并（graph 权威），two_days_ago 只有 freebuff 200
         assert!(d_prev
             .per_client
             .as_ref()

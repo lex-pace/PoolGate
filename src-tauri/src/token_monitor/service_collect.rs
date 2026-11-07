@@ -373,6 +373,19 @@ pub(crate) fn collect_with_adapter(
                     .usage_events
                     .replace_local_snapshot(&state.db.conn, &events, &covered)
                     .unwrap_or(0);
+                // 历史回填（幂等）：渠道包内部代号（`dfmodel` = DeepSeek-Flash 等）在
+                // alias_model 修正前已落库的行，归一到真实模型名，避免模型卡片同时出现
+                // 代号与真名两份。快照只重写 covered 工具，companion 工具的旧行靠这里补齐。
+                if let Ok(n) = state
+                    .db
+                    .usage_events
+                    .backfill_channel_pack_aliases(&state.db.conn)
+                {
+                    if n > 0 {
+                        tracing::info!("token_monitor: 模型代号回填 {n} 行");
+                        state.token_monitor.publish_usage_delta(state);
+                    }
+                }
                 // 同步刷新权威 period 快照(day/month),供统计查询直接读 tokscale 口径
                 crate::token_monitor::collector::tokscale::refresh_period_snapshots(&state.db.conn);
                 // W8：tokscale 权威模式会话投影——聚合快照生成 tm_session，让 tokscale

@@ -283,6 +283,9 @@ pub(crate) const COVERED_TOOL_IDS: &[&str] = &[
     "codebuddy",
     "codex",
     "cursor",
+    // tokscale 4.18 原生覆盖（--help clients 清单）；不列会导致其用量既进 period 快照、
+    // 又被 usage_event 侧当 companion 叠加——今日 Tokens 双算 + 累计快照虚高。
+    "dsh",
     "gemini",
     "github_copilot",
     "grok_build",
@@ -290,6 +293,8 @@ pub(crate) const COVERED_TOOL_IDS: &[&str] = &[
     "kilo_code",
     "kimi",
     "kiro",
+    "mcode",
+    "micode-desktop",
     "mimo",
     "minimax",
     "openclaw",
@@ -432,6 +437,12 @@ impl TokscaleAdapter {
             .cloned()
             .unwrap_or_default();
 
+        // tokscale 自带的会话真实时间戳表（`sessions` 数组：client+sessionId →
+        // firstActiveMs/lastActiveMs，按消息真实时间归因）。优先使用它——本地文件
+        // 解析（resolve_session_times）对部分工具找不到会话文件时会塌缩到扫描
+        // 时刻，让「会话生命周期累计值」整笔记进今日（今日 Tokens 虚高的根因之一）。
+        let scan_times = parse_scan_session_times(&json);
+
         // 会话时间解析缓存：同一 (client, session) 的多模型组共享一次文件读取
         let mut time_cache: std::collections::HashMap<
             (String, String),
@@ -457,10 +468,16 @@ impl TokscaleAdapter {
                 continue;
             }
             let key = (client.to_string(), session_id.to_string());
-            let times = time_cache
-                .entry(key.clone())
-                .or_insert_with(|| resolve_session_times(client, session_id))
-                .clone();
+            // 优先 tokscale `sessions` 自带的真实时间戳（有 lastActive 即不会塌缩到
+            // 扫描时刻）；缺失（旧版二进制无该数组）时回退本地文件解析。
+            let from_scan = scan_times.get(&key).cloned();
+            let times = match from_scan {
+                Some(t) if t.1.is_some() => t,
+                _ => time_cache
+                    .entry(key.clone())
+                    .or_insert_with(|| resolve_session_times(client, session_id))
+                    .clone(),
+            };
 
             // 获取上一步的 cache 值
             let cache_key = (
@@ -484,6 +501,36 @@ impl TokscaleAdapter {
         }
         Ok(events)
     }
+}
+
+/// 解析 tokscale JSON 的 `sessions` 数组 → (client, sessionId) → (开始, 最后活跃)。
+/// 旧版二进制没有该数组时返回空表（调用方回退本地文件解析）。
+fn parse_scan_session_times(
+    json: &serde_json::Value,
+) -> std::collections::HashMap<(String, String), (Option<String>, Option<String>)> {
+    let mut map = std::collections::HashMap::new();
+    if let Some(sessions) = json.get("sessions").and_then(|v| v.as_array()) {
+        for s in sessions {
+            let client = s.get("client").and_then(|v| v.as_str()).unwrap_or("");
+            let session_id = s.get("sessionId").and_then(|v| v.as_str()).unwrap_or("");
+            if client.is_empty() || session_id.is_empty() {
+                continue;
+            }
+            let started = s
+                .get("firstActiveMs")
+                .and_then(|v| v.as_i64())
+                .map(iso_from_epoch_ms);
+            let last = s
+                .get("lastActiveMs")
+                .and_then(|v| v.as_i64())
+                .map(iso_from_epoch_ms);
+            map.insert(
+                (client.to_string(), session_id.to_string()),
+                (started, last),
+            );
+        }
+    }
+    map
 }
 
 /// 单条 tokscale entry → NormalizedUsageEvent;全 0 的合成条目返回 None。
@@ -1316,9 +1363,33 @@ mod tests {
         assert!(covers_tool("mimo"));
         assert!(covers_tool("trae"));
         assert!(covers_tool("trae_solo"));
+        // tokscale 4.18 原生覆盖的 client（此前缺失导致快照+companion 双算）
+        assert!(covers_tool("dsh"));
+        assert!(covers_tool("mcode"));
+        assert!(covers_tool("micode-desktop"));
         // 未覆盖：companion 适配器（atomcode 等）应并行采集
         assert!(!covers_tool("atomcode"));
         assert!(!covers_tool("tokscale_aggregate"));
+    }
+
+    #[test]
+    fn parse_scan_session_times_extracts_sessions_array() {
+        let json = serde_json::json!({
+            "sessions": [
+                {"client": "dsh", "sessionId": "sess-1",
+                 "firstActiveMs": 1_793_354_488_699_i64, "lastActiveMs": 1_793_354_615_703_i64},
+                {"client": "", "sessionId": "skip-me"},
+            ]
+        });
+        let map = parse_scan_session_times(&json);
+        let (started, last) = map
+            .get(&("dsh".to_string(), "sess-1".to_string()))
+            .expect("dsh session times");
+        assert_eq!(started.as_deref(), Some("2026-10-30T10:01:28Z"));
+        assert_eq!(last.as_deref(), Some("2026-10-30T10:03:35Z"));
+        assert!(!map.contains_key(&("".to_string(), "skip-me".to_string())));
+        // 旧版无 sessions 数组 → 空表
+        assert!(parse_scan_session_times(&serde_json::json!({"entries": []})).is_empty());
     }
 
     #[test]

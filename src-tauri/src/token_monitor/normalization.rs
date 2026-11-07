@@ -11,6 +11,8 @@ use crate::token_monitor::model::NormalizedUsageEvent;
 /// - Freebuff 前端把 Claude Opus 4.8 展示为 `claude-fable-5`（fable 为内部代号）；
 /// - Claude Code 新版 jsonl 用 MAAS 端点名 `MaaS_Cl_Opus_4.8_<date>_cache` 报告同一模型。
 /// 两者统一归一到 `claude-opus-4-8`（与 Claude Code 旧版 jsonl 的模型名一致）。
+/// - DeepSeek Harness 渠道包把上游模型写成内部代号（`dfmodel` = DeepSeek-Flash 等），
+///   代号会原样落进 DSH 会话文件，需归一到真实模型名。
 pub fn alias_model(raw: &str) -> Option<&'static str> {
     let lower = raw.trim().to_ascii_lowercase();
     if lower == "claude-fable-5" || lower == "fable-5" {
@@ -20,7 +22,36 @@ pub fn alias_model(raw: &str) -> Option<&'static str> {
     if lower.starts_with("maas_cl_opus_4.8") {
         return Some("claude-opus-4-8");
     }
-    None
+    dsh_channel_pack_model(&lower)
+}
+
+/// DSH 渠道包内部模型代号 → 真实模型名（与 channel-pack 的 `id`/`name` 一一对应）。
+///
+/// 背景：`dsh-our-free-model` 插件的 `vendor/channel-pack/pack.js` 用代号向上游请求
+/// （如 `dfmodel` 实为 DeepSeek-Flash），DSH 把该代号写进会话文件的
+/// `request/header.config.model`，PoolGate 采集后 `model_normalized` 就是代号——
+/// 用户看到「用的是 DeepSeek Flash，统计里却写着 dfmodel」。
+///
+/// 只映射**有稳定真实名**的代号；`cmodel`/`smodel` 这类厂商自造代号保留原名
+/// （能力诚实：不猜测真实型号）。
+fn dsh_channel_pack_model(lower: &str) -> Option<&'static str> {
+    match lower {
+        // Qoder 渠道（qoder / qodercn）
+        "dfmodel" => Some("deepseek-flash"),
+        "dmodel" => Some("deepseek-v4-pro"),
+        "qfmodel" => Some("qwen3.8-flash"),
+        "q37fmodel" => Some("qwen3.7-flash"),
+        "qmodel" => Some("qwen3.7-plus"),
+        "qmodel_latest" => Some("qwen3.7-max"),
+        "qmodel_38max" => Some("qwen3.8-max"),
+        "gmodel" => Some("glm-5.3"),
+        "gfmodel" => Some("glm-5.3-flash"),
+        "gm51model" => Some("glm-5.2"),
+        "kmodel" => Some("kimi-k2.8-preview"),
+        "kmodel_latest" => Some("kimi-k3"),
+        "mmodel" => Some("minimax-m3"),
+        _ => None,
+    }
 }
 
 /// 归一模型名：去掉厂商模型名中的日期后缀等易变部分。
@@ -217,6 +248,34 @@ mod tests {
             normalize_model("claude-opus-4-8-thinking"),
             "claude-opus-4-8-thinking"
         );
+    }
+
+    #[test]
+    fn normalize_dsh_channel_pack_codenames_to_real_models() {
+        // DSH 渠道包用内部代号请求上游，代号会原样写进会话文件并落库；
+        // 必须归一到真实模型名，否则用户看到「dfmodel」而非 DeepSeek-Flash。
+        assert_eq!(normalize_model("dfmodel"), "deepseek-flash");
+        assert_eq!(normalize_model("dmodel"), "deepseek-v4-pro");
+        assert_eq!(normalize_model("qfmodel"), "qwen3.8-flash");
+        assert_eq!(normalize_model("gmodel"), "glm-5.3");
+        assert_eq!(normalize_model("gfmodel"), "glm-5.3-flash");
+        assert_eq!(normalize_model("kmodel_latest"), "kimi-k3");
+        assert_eq!(normalize_model("mmodel"), "minimax-m3");
+        // 大小写与空白同样归一（DB 里可能带空格）
+        assert_eq!(normalize_model(" DFModel "), "deepseek-flash");
+        // 未映射的自造代号保持原名（能力诚实，不猜测）
+        assert_eq!(normalize_model("cmodel"), "cmodel");
+    }
+
+    #[test]
+    fn finalize_aliases_dsh_codename_preset_model_normalized() {
+        // tokscale/DSH 直填 model_normalized=dfmodel 时也要归一到真实模型名。
+        let mut e = event(Some("dfmodel"));
+        e.model_normalized = Some("dfmodel".into());
+        finalize(&mut e);
+        assert_eq!(e.model_normalized.as_deref(), Some("deepseek-flash"));
+        // model_raw 保留代号，便于诊断上游来源
+        assert_eq!(e.model_raw.as_deref(), Some("dfmodel"));
     }
 
     #[test]

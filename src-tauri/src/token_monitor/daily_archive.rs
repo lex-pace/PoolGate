@@ -57,17 +57,68 @@ fn capture_into_archive(archive: &mut BTreeMap<String, TrendDay>, series: &Trend
     changed
 }
 
+/// 归档污染一次性清洗标记：旧版本把 tokscale 实际已覆盖的 client（dsh / mcode /
+/// micode-desktop）当 companion 工具叠加进每日归档，且其 usage_event 行因 occurred_at
+/// 塌缩到扫描时刻被每 5 分钟重复插入——归档里的历史日被放大数倍（如 2026-10-11
+/// 12.6B）。清单修正后一次性剔除这些工具的 split 并按剩余 split 重算 tokens。
+const SANITIZED_KEY: &str = "tm.archive.sanitized_covered_tools";
+
+/// 一次性清洗归档中 covered 工具的污染条目（幂等，标记后即短路）。
+fn sanitize_covered_tool_splits_once(conn: &Mutex<Connection>) -> Result<(), String> {
+    if SettingsRepo.get(conn, SANITIZED_KEY)?.is_some() {
+        return Ok(());
+    }
+    let mut archive = read_archive(conn);
+    let mut changed = false;
+    for day in archive.values_mut() {
+        let Some(clients) = day.per_client.as_ref() else {
+            continue;
+        };
+        let polluted: Vec<String> = clients
+            .iter()
+            .filter(|s| matches!(s.key.as_str(), "dsh" | "mcode" | "micode-desktop"))
+            .map(|s| s.key.clone())
+            .collect();
+        if polluted.is_empty() {
+            continue;
+        }
+        // 剔除污染工具（同 key 多条=重复叠加，全部剔除）。
+        if let Some(list) = day.per_client.as_mut() {
+            list.retain(|s| !polluted.contains(&s.key));
+        }
+        day.per_model = None; // 模型拆分已无法与总量对齐，诚实丢弃（仅影响丢失日拆分）
+        let remaining: i64 = day
+            .per_client
+            .as_ref()
+            .map(|list| list.iter().map(|s| s.tokens).sum())
+            .unwrap_or(0);
+        day.tokens = remaining;
+        if remaining <= 0 {
+            day.requests = 0;
+            day.active_time_ms = 0;
+        }
+        changed = true;
+    }
+    if changed {
+        write_archive(conn, &archive);
+    }
+    let _ = SettingsRepo.set(conn, SANITIZED_KEY, "1");
+    Ok(())
+}
+
 /// 合并归档 + 捕获 live + 重算汇总（`trend_series` 的唯一入口）。
 ///
 /// 顺序：
-///   1. 一次性播种开源 Token Monitor 的历史归档（对齐历史活跃天数）；
-///   2. 把当前 live 日并入归档（不缩水）；
-///   3. 把归档中「live 已丢失」的日补回 `series.daily`；
-///   4. 用合并后的日序列重算 active_days / streak_days / peak_day / monthly / active_time。
+///   1. 一次性清洗历史归档中 covered 工具的污染条目（旧 companion 双算遗留）；
+///   2. 一次性播种开源 Token Monitor 的历史归档（对齐历史活跃天数）；
+///   3. 把当前 live 日并入归档（不缩水）；
+///   4. 把归档中「live 已丢失」的日补回 `series.daily`；
+///   5. 用合并后的日序列重算 active_days / streak_days / peak_day / monthly / active_time。
 pub(crate) fn merge_and_capture(
     conn: &Mutex<Connection>,
     series: &mut TrendSeries,
 ) -> Result<(), String> {
+    let _ = sanitize_covered_tool_splits_once(conn);
     let _ = seed_from_token_monitor_once(conn);
 
     let mut archive = read_archive(conn);
